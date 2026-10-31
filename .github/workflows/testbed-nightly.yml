@@ -18,7 +18,7 @@ jobs:
       TESTBED_OPENAI_COMPAT_API_KEY: ${{ secrets.TESTBED_OPENAI_COMPAT_API_KEY }}
       TESTBED_OPENAI_COMPAT_MODEL: ${{ vars.TESTBED_OPENAI_COMPAT_MODEL }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
