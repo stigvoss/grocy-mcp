@@ -100,7 +100,7 @@ from grocy_mcp.core.reference_data import (
     search_entity_candidates_data,
 )
 from grocy_mcp.core.stock_journal import stock_journal
-from grocy_mcp.core.system import entity_list, entity_manage, system_info
+from grocy_mcp.core.system import entity_list, entity_manage, system_info, userfields_set
 from grocy_mcp.core.tasks import task_complete, task_create, task_delete, task_undo, tasks_list
 from grocy_mcp.core.workflows import (
     workflow_match_products_preview_data,
@@ -1126,6 +1126,29 @@ def create_mcp_server() -> FastMCP:
         """
         async with _get_client() as client:
             return await entity_manage(client, entity, "delete", obj_id=obj_id)
+
+    @mcp.tool()
+    async def userfields_set_tool(entity: str, obj_id: int, data: str) -> str:
+        """Set userfield values on an existing Grocy entity object.
+
+        This is for custom userfields only (the ones configured under
+        Manage master data > Userfields in Grocy), not regular entity fields —
+        use entity_update_tool for those. Userfield names are passed without
+        any 'userfield_' prefix. Only the fields provided in data are changed.
+
+        Args:
+            entity: Entity type name (e.g. 'products', 'locations').
+            obj_id: The object ID to update (use entity_list_tool to find IDs).
+            data: JSON object of userfield name -> value.
+                  Example: '{"ai_notes": "Prefer paprika flavour"}'.
+        """
+        parsed_data = _parse_json_arg(data, "data")
+        if not isinstance(parsed_data, dict) or not parsed_data:
+            raise GrocyValidationError(
+                "userfields_set_tool requires a non-empty object of field values."
+            )
+        async with _get_client() as client:
+            return await userfields_set(client, entity, obj_id, parsed_data)
 
     return mcp
 

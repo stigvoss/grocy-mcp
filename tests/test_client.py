@@ -47,6 +47,18 @@ async def test_delete_object(client, mock_api):
     await client.delete_object("products", 1)
 
 
+async def test_update_userfields(client, mock_api):
+    route = mock_api.put("/userfields/products/87").mock(return_value=httpx.Response(204))
+    await client.update_userfields("products", 87, {"ai_notes": "Prefer paprika"})
+    assert route.calls.last.request.read() == b'{"ai_notes":"Prefer paprika"}'
+
+
+async def test_update_userfields_not_found(client, mock_api):
+    mock_api.put("/userfields/products/87").mock(return_value=httpx.Response(404))
+    with pytest.raises(GrocyNotFoundError):
+        await client.update_userfields("products", 87, {"ai_notes": "x"})
+
+
 async def test_get_stock(client, mock_api):
     mock_api.get("/stock").mock(
         return_value=httpx.Response(200, json=[{"product_id": 1, "amount": 3}])

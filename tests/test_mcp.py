@@ -72,6 +72,48 @@ async def test_entity_create_tool_invalid_json_returns_clear_error():
         await mcp.call_tool("entity_create_tool", {"entity": "products", "data": "{bad"})
 
 
+async def test_userfields_set_tool_invalid_json_returns_clear_error():
+    mcp = create_mcp_server()
+
+    with pytest.raises(Exception, match="Invalid JSON for data"):
+        await mcp.call_tool(
+            "userfields_set_tool", {"entity": "products", "obj_id": 87, "data": "{bad"}
+        )
+
+
+async def test_userfields_set_tool_empty_object_returns_clear_error():
+    mcp = create_mcp_server()
+
+    with pytest.raises(Exception, match="non-empty object"):
+        await mcp.call_tool(
+            "userfields_set_tool", {"entity": "products", "obj_id": 87, "data": "{}"}
+        )
+
+
+async def test_userfields_set_tool_calls_client(monkeypatch):
+    mcp = create_mcp_server()
+
+    calls = []
+
+    @asynccontextmanager
+    async def fake_client():
+        class Client:
+            async def update_userfields(self, entity, obj_id, data):
+                calls.append((entity, obj_id, data))
+
+        yield Client()
+
+    monkeypatch.setattr("grocy_mcp.mcp.server._get_client", fake_client)
+
+    result = await mcp.call_tool(
+        "userfields_set_tool",
+        {"entity": "products", "obj_id": 87, "data": '{"ai_notes": "Prefer paprika flavour"}'},
+    )
+
+    assert calls == [("products", 87, {"ai_notes": "Prefer paprika flavour"})]
+    assert "87" in result.content[0].text
+
+
 async def test_workflow_match_products_preview_tool_invalid_json_returns_clear_error():
     mcp = create_mcp_server()
 
