@@ -72,3 +72,11 @@ async def entity_manage(
             raise GrocyValidationError(
                 f"Unknown action '{action}'. Valid actions: create, update, delete."
             )
+
+
+async def userfields_set(client: GrocyClient, entity: str, obj_id: int, data: dict) -> str:
+    """Set userfield values on an existing Grocy entity object."""
+    if not isinstance(data, dict) or not data:
+        raise GrocyValidationError("userfields_set requires a non-empty object of field values.")
+    await client.update_userfields(entity, obj_id, data)
+    return f"Updated userfields for {entity} object ID {obj_id}."

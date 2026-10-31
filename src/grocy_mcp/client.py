@@ -95,6 +95,9 @@ class GrocyClient:
     async def delete_object(self, entity: str, obj_id: int) -> None:
         await self._request("DELETE", f"/objects/{entity}/{obj_id}")
 
+    async def update_userfields(self, entity: str, obj_id: int, data: dict) -> None:
+        await self._request("PUT", f"/userfields/{entity}/{obj_id}", json=data)
+
     # --- Stock ---
 
     async def get_stock(self) -> list[dict]:

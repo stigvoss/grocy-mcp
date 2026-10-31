@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from grocy_mcp.core.system import entity_list, entity_manage, system_info
+from grocy_mcp.core.system import entity_list, entity_manage, system_info, userfields_set
 from grocy_mcp.exceptions import GrocyValidationError
 
 
@@ -23,6 +23,7 @@ def mock_client():
     client.create_object.return_value = 42
     client.update_object.return_value = None
     client.delete_object.return_value = None
+    client.update_userfields.return_value = None
     return client
 
 
@@ -83,3 +84,23 @@ async def test_entity_manage_create_empty_data(mock_client):
     result = await entity_manage(mock_client, "products", "create")
     mock_client.create_object.assert_called_once_with("products", {})
     assert "42" in result
+
+
+async def test_userfields_set(mock_client):
+    result = await userfields_set(mock_client, "products", 87, {"ai_notes": "Prefer paprika"})
+    mock_client.update_userfields.assert_called_once_with(
+        "products", 87, {"ai_notes": "Prefer paprika"}
+    )
+    assert "87" in result
+
+
+async def test_userfields_set_empty_data(mock_client):
+    with pytest.raises(GrocyValidationError, match="non-empty object"):
+        await userfields_set(mock_client, "products", 87, {})
+    mock_client.update_userfields.assert_not_called()
+
+
+async def test_userfields_set_non_dict_data(mock_client):
+    with pytest.raises(GrocyValidationError, match="non-empty object"):
+        await userfields_set(mock_client, "products", 87, ["not", "a", "dict"])
+    mock_client.update_userfields.assert_not_called()

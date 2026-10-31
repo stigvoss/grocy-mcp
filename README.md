@@ -56,6 +56,8 @@ Grocy already has a solid REST API, but most day-to-day interactions still requi
 - Streamable HTTP and stdio MCP transports
 - Async client layer with retry handling for transient server errors
 - Generic entity access for Grocy resources outside the dedicated commands
+- Userfield writes (`userfields_set_tool`) for Grocy custom fields, which require a
+  separate endpoint from regular entity updates
 - Test suite built with `pytest`, `pytest-asyncio`, and `respx`
 
 ## Current status
