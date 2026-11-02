@@ -359,7 +359,7 @@ async def describe_entity_data(client: GrocyClient, entity: str) -> dict:
     sample_items = await client.get_objects(entity)
     sample_fields: list[str] = []
     for item in sample_items[:10]:
-        for key in item.keys():
+        for key in item:
             if key not in sample_fields:
                 sample_fields.append(key)
 

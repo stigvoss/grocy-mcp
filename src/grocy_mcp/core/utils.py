@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 _DATETIME_FORMATS = [
     "%Y-%m-%d %H:%M:%S",
@@ -17,7 +17,7 @@ def parse_datetime(value: str | None) -> datetime | None:
         return None
     for fmt in _DATETIME_FORMATS:
         try:
-            return datetime.strptime(value, fmt).replace(tzinfo=timezone.utc)
+            return datetime.strptime(value, fmt).replace(tzinfo=UTC)
         except ValueError:
             continue
     return None

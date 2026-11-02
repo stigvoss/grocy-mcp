@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from grocy_mcp.client import GrocyClient
 from grocy_mcp.core.resolve import resolve_chore
@@ -28,7 +28,7 @@ async def chores_list(client: GrocyClient) -> str:
 async def chores_overdue(client: GrocyClient) -> str:
     """Return chores that are overdue (next execution time is in the past)."""
     chores = await client.get_chores()
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
 
     overdue = []
     for entry in chores:

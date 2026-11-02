@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from grocy_mcp.client import GrocyClient
-from grocy_mcp.core.utils import parse_datetime
 from grocy_mcp.core.resolve import resolve_entity
+from grocy_mcp.core.utils import parse_datetime
 
 
 async def batteries_list(client: GrocyClient) -> str:
@@ -93,7 +93,7 @@ async def batteries_due(client: GrocyClient, days: int = 7) -> str:
 async def batteries_due_data(client: GrocyClient, days: int = 7) -> list[dict]:
     """Return batteries due within the given number of days as structured data."""
     current = await batteries_list_data(client)
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     cutoff = now + timedelta(days=days)
 
     due_items = []
@@ -120,7 +120,7 @@ async def batteries_overdue(client: GrocyClient) -> str:
 async def batteries_overdue_data(client: GrocyClient) -> list[dict]:
     """Return overdue batteries as structured data."""
     current = await batteries_list_data(client)
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
 
     overdue_items = []
     for entry in current:

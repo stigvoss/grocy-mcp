@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from grocy_mcp.client import GrocyClient
 from grocy_mcp.core.resolve import resolve_product, resolve_recipe
+from grocy_mcp.exceptions import GrocyError
 
 
 async def recipes_list(client: GrocyClient) -> str:
@@ -167,7 +168,7 @@ async def recipe_create_by_name(
                 pos_data = {"recipe_id": recipe_id, "product_id": product_id, "amount": amount}
                 await client.create_object("recipes_pos", pos_data)
                 ingredient_count += 1
-            except Exception as exc:
+            except GrocyError as exc:
                 failed.append(f"{product_name} ({exc})")
 
     result = f"Recipe '{name}' created (ID {recipe_id}) with {ingredient_count} ingredient(s)."
