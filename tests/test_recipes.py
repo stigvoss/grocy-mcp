@@ -17,6 +17,7 @@ from grocy_mcp.core.recipes import (
     recipe_update,
     recipes_list,
 )
+from grocy_mcp.exceptions import GrocyResolveError, GrocyServerError
 
 
 @pytest.fixture
@@ -143,6 +144,41 @@ async def test_recipe_create_by_name(mock_client):
     mock_client.create_object.assert_any_call(
         "recipes_pos", {"recipe_id": 10, "product_id": 2, "amount": 3}
     )
+
+
+async def test_recipe_create_by_name_reports_grocy_errors_and_continues(mock_client):
+    mock_client.create_object.return_value = 10
+    ingredients = [{"product": "Nope", "amount": 1}, {"product": "Egg", "amount": 3}]
+    with patch(
+        "grocy_mcp.core.recipes.resolve_product",
+        side_effect=[GrocyResolveError("no match"), 2],
+    ):
+        result = await recipe_create_by_name(mock_client, "Cake", ingredients=ingredients)
+    assert "1 ingredient(s)" in result
+    assert "Failed ingredients: Nope (no match)" in result
+    mock_client.create_object.assert_any_call(
+        "recipes_pos", {"recipe_id": 10, "product_id": 2, "amount": 3}
+    )
+
+
+async def test_recipe_create_by_name_reports_api_errors_on_ingredient(mock_client):
+    mock_client.create_object.side_effect = [10, GrocyServerError("boom"), 99]
+    ingredients = [{"product": "Flour", "amount": 2}, {"product": "Egg", "amount": 3}]
+    with patch("grocy_mcp.core.recipes.resolve_product", side_effect=[1, 2]):
+        result = await recipe_create_by_name(mock_client, "Cake", ingredients=ingredients)
+    assert "1 ingredient(s)" in result
+    assert "Flour (boom)" in result
+
+
+async def test_recipe_create_by_name_propagates_unrelated_exceptions(mock_client):
+    mock_client.create_object.return_value = 10
+    with (
+        patch("grocy_mcp.core.recipes.resolve_product", side_effect=KeyError("bug")),
+        pytest.raises(KeyError),
+    ):
+        await recipe_create_by_name(
+            mock_client, "Cake", ingredients=[{"product": "Flour", "amount": 2}]
+        )
 
 
 async def test_recipe_update(mock_client):
