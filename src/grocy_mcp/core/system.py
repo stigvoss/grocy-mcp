@@ -59,6 +59,10 @@ async def entity_manage(
             if obj_id is None:
                 raise GrocyValidationError("Update requires an obj_id.")
             payload = data or {}
+            if "userfields" in payload:
+                raise GrocyValidationError(
+                    "Use userfields_set_tool for userfields; entity updates cannot change them."
+                )
             await client.update_object(entity, obj_id, payload)
             return f"Updated {entity} object ID {obj_id}."
 

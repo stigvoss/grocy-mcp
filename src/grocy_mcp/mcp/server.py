@@ -77,6 +77,7 @@ from grocy_mcp.core.stock import (
     stock_consume,
     stock_expiring,
     stock_inventory,
+    stock_levels_data,
     stock_open,
     stock_overview,
     stock_product_info,
@@ -100,6 +101,7 @@ from grocy_mcp.core.reference_data import (
     search_entity_candidates_data,
 )
 from grocy_mcp.core.stock_journal import stock_journal
+from grocy_mcp.core.products import products_list_data
 from grocy_mcp.core.system import entity_list, entity_manage, system_info, userfields_set
 from grocy_mcp.core.tasks import task_complete, task_create, task_delete, task_undo, tasks_list
 from grocy_mcp.core.workflows import (
@@ -144,6 +146,42 @@ def create_mcp_server() -> FastMCP:
             return await stock_overview(client)
 
     @mcp.tool()
+    async def stock_levels_tool(
+        product_group: str | None = None, high_churn: bool | None = None
+    ) -> list[dict]:
+        """List all active products with their stock amount, including products at 0 stock.
+
+        Unlike stock_overview_tool, products that are out of stock are included with
+        amount 0. Each row has product_id, name, amount, stock_unit, default_location,
+        product_group_id and high_churn.
+
+        Args:
+            product_group: Optional product group name or numeric ID to filter on.
+            high_churn: Optional; True keeps only products whose high_churn userfield is
+                        set, False only those where it is not.
+        """
+        async with _get_client() as client:
+            return await stock_levels_data(client, product_group, high_churn)
+
+    @mcp.tool()
+    async def products_list_tool(
+        fields: list[str] | None = None, userfields_set: list[str] | None = None
+    ) -> list[dict]:
+        """List all products as full JSON including their userfields, in one request.
+
+        Each product has a 'userfields' object (e.g. ai_notes, bilkatogo_ids, high_churn,
+        mealieId). Read-only.
+
+        Args:
+            fields: Optional keys to keep, e.g. ["id", "name", "userfields.bilkatogo_ids"].
+                    All keys are returned when omitted.
+            userfields_set: Optional userfield names that must be non-empty, e.g.
+                            ["bilkatogo_ids"] returns only products that have that value.
+        """
+        async with _get_client() as client:
+            return await products_list_data(client, fields, userfields_set)
+
+    @mcp.tool()
     async def stock_expiring_tool() -> str:
         """List products that are expiring soon, already expired, or below minimum stock.
 
@@ -156,7 +194,8 @@ def create_mcp_server() -> FastMCP:
     async def stock_product_info_tool(product: str) -> str:
         """Get detailed stock information for a single product.
 
-        Returns current amount, best-before date, and product metadata.
+        Returns current amount with stock unit, unopened and opened amounts, default
+        location, and next best-before date.
 
         Args:
             product: Product name (e.g. "Milk") or numeric product ID.
@@ -215,6 +254,9 @@ def create_mcp_server() -> FastMCP:
     @mcp.tool()
     async def stock_open_tool(product: str, amount: float = 1.0) -> str:
         """Mark stock units as opened (e.g. an opened bottle of milk).
+
+        If there is not enough unopened stock, nothing is changed and the reply states the
+        unopened and opened amounts.
 
         Args:
             product: Product name (e.g. "Milk") or numeric product ID.
@@ -1105,6 +1147,7 @@ def create_mcp_server() -> FastMCP:
         """Update an existing Grocy entity object by its ID.
 
         Only the fields provided in data are changed; other fields are left as-is.
+        A 'userfields' key is rejected: use userfields_set_tool for userfields.
 
         Args:
             entity: Entity type name (e.g. 'products', 'locations').
