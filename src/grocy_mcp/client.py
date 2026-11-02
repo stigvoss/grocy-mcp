@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Self
 
 import httpx
 
@@ -30,10 +30,10 @@ class GrocyClient:
             timeout=httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0),
         )
 
-    async def __aenter__(self) -> GrocyClient:
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, *exc: Any) -> None:
+    async def __aexit__(self, *exc: object) -> None:
         await self._client.aclose()
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from grocy_mcp.client import GrocyClient
 from grocy_mcp.core.utils import parse_datetime
@@ -24,9 +24,7 @@ def _in_date_range(day: date | None, start_date: str | None, end_date: str | Non
         return False
     if start_date and day < date.fromisoformat(start_date):
         return False
-    if end_date and day > date.fromisoformat(end_date):
-        return False
-    return True
+    return not (end_date and day > date.fromisoformat(end_date))
 
 
 async def calendar_summary_data(
@@ -35,7 +33,7 @@ async def calendar_summary_data(
     end_date: str | None = None,
 ) -> dict:
     """Return a combined planning summary across chores, batteries, tasks, and meal plan."""
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     open_tasks = await client.get_tasks()
     chores = await client.get_chores()
     batteries = await client.get_batteries()
@@ -47,33 +45,37 @@ async def calendar_summary_data(
     filtered_tasks = []
     for task in open_tasks:
         due_date = _parse_date(task.get("due_date"))
-        if start_date or end_date:
-            if due_date is None or not _in_date_range(due_date, start_date, end_date):
-                continue
+        if (start_date or end_date) and (
+            due_date is None or not _in_date_range(due_date, start_date, end_date)
+        ):
+            continue
         filtered_tasks.append(task)
 
     chore_rows = []
     for row in chores:
         next_exec = parse_datetime(row.get("next_estimated_execution_time"))
-        if start_date or end_date:
-            if next_exec is None or not _in_date_range(next_exec.date(), start_date, end_date):
-                continue
+        if (start_date or end_date) and (
+            next_exec is None or not _in_date_range(next_exec.date(), start_date, end_date)
+        ):
+            continue
         chore_rows.append(row)
 
     battery_rows = []
     for row in batteries:
         next_charge = parse_datetime(row.get("next_estimated_charge_time"))
-        if start_date or end_date:
-            if next_charge is None or not _in_date_range(next_charge.date(), start_date, end_date):
-                continue
+        if (start_date or end_date) and (
+            next_charge is None or not _in_date_range(next_charge.date(), start_date, end_date)
+        ):
+            continue
         battery_rows.append(row)
 
     meal_rows = []
     for row in meal_plan_entries:
         day = _parse_date(row.get("day"))
-        if start_date or end_date:
-            if day is None or not _in_date_range(day, start_date, end_date):
-                continue
+        if (start_date or end_date) and (
+            day is None or not _in_date_range(day, start_date, end_date)
+        ):
+            continue
         meal_rows.append(
             {
                 **row,

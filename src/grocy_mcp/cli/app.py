@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
@@ -13,18 +13,18 @@ import typer
 from grocy_mcp.client import GrocyClient
 from grocy_mcp.config import load_config
 from grocy_mcp.core.batteries import (
-    batteries_due_data,
-    batteries_list_data,
-    batteries_list,
     batteries_due,
-    batteries_overdue_data,
+    batteries_due_data,
+    batteries_list,
+    batteries_list_data,
     batteries_overdue,
-    battery_details_data,
+    batteries_overdue_data,
     battery_charge,
     battery_create,
-    battery_cycle_history_data,
     battery_cycle_history,
+    battery_cycle_history_data,
     battery_details,
+    battery_details_data,
     battery_undo_cycle,
     battery_update,
 )
@@ -40,41 +40,6 @@ from grocy_mcp.core.chores import (
     chore_undo,
     chores_list,
     chores_overdue,
-)
-from grocy_mcp.core.utils import parse_datetime
-from grocy_mcp.core.recipes import (
-    recipe_add_ingredient,
-    recipe_add_to_shopping,
-    recipe_consume,
-    recipe_consume_preview,
-    recipe_create,
-    recipe_details,
-    recipe_fulfillment,
-    recipe_remove_ingredient,
-    recipe_update,
-    recipes_list,
-)
-from grocy_mcp.core.shopping import (
-    shopping_list_add,
-    shopping_list_add_missing,
-    shopping_list_clear,
-    shopping_list_remove,
-    shopping_list_set_amount,
-    shopping_list_set_note,
-    shopping_list_update,
-    shopping_list_view,
-)
-from grocy_mcp.core.stock import (
-    stock_add,
-    stock_barcode_lookup,
-    stock_consume,
-    stock_expiring,
-    stock_inventory,
-    stock_open,
-    stock_overview,
-    stock_product_info,
-    stock_search,
-    stock_transfer,
 )
 from grocy_mcp.core.equipment import (
     equipment_create,
@@ -105,6 +70,18 @@ from grocy_mcp.core.meal_plan import (
     meal_plan_summary,
     meal_plan_summary_data,
 )
+from grocy_mcp.core.recipes import (
+    recipe_add_ingredient,
+    recipe_add_to_shopping,
+    recipe_consume,
+    recipe_consume_preview,
+    recipe_create,
+    recipe_details,
+    recipe_fulfillment,
+    recipe_remove_ingredient,
+    recipe_update,
+    recipes_list,
+)
 from grocy_mcp.core.reference_data import (
     describe_entity,
     describe_entity_data,
@@ -119,9 +96,32 @@ from grocy_mcp.core.reference_data import (
     search_entity_candidates_data,
 )
 from grocy_mcp.core.resolve import resolve_product, resolve_recipe
+from grocy_mcp.core.shopping import (
+    shopping_list_add,
+    shopping_list_add_missing,
+    shopping_list_clear,
+    shopping_list_remove,
+    shopping_list_set_amount,
+    shopping_list_set_note,
+    shopping_list_update,
+    shopping_list_view,
+)
+from grocy_mcp.core.stock import (
+    stock_add,
+    stock_barcode_lookup,
+    stock_consume,
+    stock_expiring,
+    stock_inventory,
+    stock_open,
+    stock_overview,
+    stock_product_info,
+    stock_search,
+    stock_transfer,
+)
 from grocy_mcp.core.stock_journal import stock_journal
 from grocy_mcp.core.system import entity_list, entity_manage, system_info
 from grocy_mcp.core.tasks import task_complete, task_create, task_delete, task_undo, tasks_list
+from grocy_mcp.core.utils import parse_datetime
 from grocy_mcp.core.workflows import (
     workflow_match_products_preview,
     workflow_match_products_preview_data,
@@ -290,7 +290,7 @@ async def _recipe_details_json(client: GrocyClient, recipe: str) -> dict:
 async def _chores_overdue_json(client: GrocyClient) -> list[dict]:
     """Return only overdue chores for JSON output."""
     chores = await client.get_chores()
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     return [
         entry
         for entry in chores
@@ -326,7 +326,7 @@ def main_callback(
     ),
 ) -> None:
     """Grocy CLI — control your Grocy instance from the command line."""
-    global _cli_url, _cli_api_key, _output_json  # noqa: PLW0603
+    global _cli_url, _cli_api_key, _output_json
     _cli_url = url
     _cli_api_key = api_key
     _output_json = output_json
