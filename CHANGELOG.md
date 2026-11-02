@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Bulk product read**: `products_list_tool` returns every product with its `userfields` in one
+  request, with optional `fields` (e.g. `userfields.bilkatogo_ids`) and `userfields_set` filters
+- **Stock levels**: `stock_levels_tool` lists all active products including those at 0 stock, with
+  stock unit and default location, filterable by product group or `high_churn`
+- `stock_product_info_tool` now also returns stock unit, location, and unopened/opened amounts
+
+### Changed
+
+- `stock_open_tool` returns a clear message (product, unopened and opened amounts) instead of a raw
+  API error when there is not enough unopened stock
+- `entity_update_tool` rejects a `userfields` key up front and points to `userfields_set_tool`
+
+### Added (earlier)
+
 - **Userfields tool**: `userfields_set_tool` to write Grocy custom userfield values via
   `PUT /api/userfields/{entity}/{objectId}`, since the generic `/objects` endpoint rejects
   userfield keys

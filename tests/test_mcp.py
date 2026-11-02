@@ -228,3 +228,8 @@ async def test_file_download_tool_returns_base64(monkeypatch):
     payload = result.structured_content.get("result", result.structured_content)
     assert payload["group"] == "productpictures"
     assert payload["content_type"] == "text/plain"
+
+
+async def test_new_tools_are_registered():
+    tools = {t.name for t in await create_mcp_server().list_tools()}
+    assert {"products_list_tool", "stock_levels_tool"} <= tools

@@ -104,3 +104,17 @@ async def test_userfields_set_non_dict_data(mock_client):
     with pytest.raises(GrocyValidationError, match="non-empty object"):
         await userfields_set(mock_client, "products", 87, ["not", "a", "dict"])
     mock_client.update_userfields.assert_not_called()
+
+
+async def test_entity_update_rejects_userfields_without_request(mock_client):
+    with pytest.raises(GrocyValidationError, match="userfields_set_tool"):
+        await entity_manage(
+            mock_client, "products", "update", obj_id=1, data={"userfields": {"ai_notes": "x"}}
+        )
+    mock_client.update_object.assert_not_called()
+
+
+async def test_entity_update_plain_rename_still_works(mock_client):
+    result = await entity_manage(mock_client, "products", "update", obj_id=1, data={"name": "New"})
+    mock_client.update_object.assert_called_once_with("products", 1, {"name": "New"})
+    assert "Updated" in result

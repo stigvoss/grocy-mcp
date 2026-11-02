@@ -101,6 +101,7 @@ async def test_stock_inventory(mock_client):
 
 
 async def test_stock_open(mock_client):
+    mock_client.get_stock_product.return_value = {"product": {"name": "Milk"}, "stock_amount": 3}
     mock_client.open_stock.return_value = [{"id": 10}]
     with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
         result = await stock_open(mock_client, "Milk", 1.0)
@@ -171,6 +172,7 @@ async def test_stock_inventory_quotes_name(mock_client):
 
 
 async def test_stock_open_quotes_name(mock_client):
+    mock_client.get_stock_product.return_value = {"product": {"name": "Milk"}, "stock_amount": 3}
     mock_client.open_stock.return_value = [{"id": 10}]
     with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
         result = await stock_open(mock_client, "Milk", 1.0)
@@ -193,3 +195,89 @@ async def test_stock_search_no_results(mock_client):
     ]
     result = await stock_search(mock_client, "Cheese")
     assert "No products found matching 'Cheese'." in result
+
+
+def _info(stock, opened, name="Minced beef"):
+    return {
+        "product": {"id": 7, "name": name},
+        "stock_amount": stock,
+        "stock_amount_opened": opened,
+        "quantity_unit_stock": {"name": "Pack"},
+        "location": {"name": "Freezer"},
+        "next_best_before_date": "2026-12-01",
+    }
+
+
+async def test_stock_product_info_includes_unit_location_and_opened(mock_client):
+    mock_client.get_stock_product.return_value = _info(4, 1)
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=7):
+        result = await stock_product_info(mock_client, "Minced beef")
+    assert "In stock: 4 Pack" in result
+    assert "Unopened: 3" in result
+    assert "Opened: 1" in result
+    assert "Location: Freezer" in result
+
+
+async def test_stock_open_already_open_returns_message_without_calling_api(mock_client):
+    mock_client.get_stock_product.return_value = _info(1, 1)
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=7):
+        result = await stock_open(mock_client, "Minced beef", 1.0)
+    mock_client.open_stock.assert_not_called()
+    assert "Minced beef" in result
+    assert "unopened amount is 0" in result
+
+
+async def test_stock_open_validation_error_becomes_message(mock_client):
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    mock_client.get_stock_product.return_value = _info(2, 0)
+    mock_client.open_stock.side_effect = GrocyValidationError("Validation error: SQL boom")
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=7):
+        result = await stock_open(mock_client, "Minced beef", 1.0)
+    assert "SQL" not in result
+    assert "Minced beef" in result
+
+
+async def test_stock_levels_includes_zero_stock_and_filters(mock_client):
+    from grocy_mcp.core.stock import stock_levels_data
+
+    mock_client.get_stock.return_value = [{"product_id": 1, "amount": 3}]
+
+    async def get_objects(entity, query=None):
+        return {
+            "products": [
+                {
+                    "id": 1,
+                    "name": "Milk",
+                    "qu_id_stock": 1,
+                    "location_id": 1,
+                    "product_group_id": 5,
+                    "userfields": {"high_churn": "1"},
+                },
+                {
+                    "id": 2,
+                    "name": "Cooking cream",
+                    "qu_id_stock": 1,
+                    "location_id": 2,
+                    "product_group_id": 6,
+                    "userfields": {"high_churn": "0"},
+                },
+                {"id": 3, "name": "Old", "active": 0, "qu_id_stock": 1},
+            ],
+            "quantity_units": [{"id": 1, "name": "Pack"}],
+            "locations": [{"id": 1, "name": "Fridge"}, {"id": 2, "name": "Pantry"}],
+            "product_groups": [{"id": 5, "name": "Dairy"}, {"id": 6, "name": "Cooking"}],
+        }[entity]
+
+    mock_client.get_objects.side_effect = get_objects
+
+    rows = await stock_levels_data(mock_client)
+    cream = next(r for r in rows if r["name"] == "Cooking cream")
+    assert cream["amount"] == 0
+    assert cream["stock_unit"] == "Pack"
+    assert cream["default_location"] == "Pantry"
+    assert all(r["name"] != "Old" for r in rows)
+
+    assert [r["name"] for r in await stock_levels_data(mock_client, high_churn=True)] == ["Milk"]
+    by_group = await stock_levels_data(mock_client, product_group="cooking")
+    assert [r["name"] for r in by_group] == ["Cooking cream"]
