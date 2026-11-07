@@ -561,3 +561,22 @@ async def test_stock_inventory_rereads_split_after_opening(mock_client):
     with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
         result = await stock_inventory(mock_client, "Milk", 2.0, opened_amount=1)
     assert "unopened 0, opened 2" in result
+    assert "cannot un-open" in result
+
+
+def test_stock_inventory_locks_work_across_successive_event_loops():
+    def run_once():
+        client = _FakeStockClient(total=3, opened=0)
+
+        async def both():
+            with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+                return await asyncio.gather(
+                    stock_inventory(client, "Milk", 2.0, opened_amount=1),
+                    stock_inventory(client, "Milk", 2.0, opened_amount=1),
+                )
+
+        asyncio.run(both())
+        return client
+
+    assert run_once().opened == 1
+    assert run_once().opened == 1
