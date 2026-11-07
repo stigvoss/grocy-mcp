@@ -111,3 +111,150 @@ async def test_userfield_filters_combine_and_validate(userfield_client):
     for bad in ({"bilkatogo_ids": ""}, {"": 5}, "x"):
         with pytest.raises(GrocyValidationError):
             await products_list_data(userfield_client, userfields_match=bad)
+
+
+@pytest.fixture
+def create_client():
+    from grocy_mcp.core import products as products_module  # noqa: F401
+
+    client = AsyncMock()
+
+    async def get_objects(entity, query=None):
+        return {
+            "quantity_units": [{"id": 2, "name": "Piece"}, {"id": 3, "name": "Pack"}],
+            "locations": [{"id": 2, "name": "Fridge"}, {"id": 4, "name": "Freezer"}],
+            "product_groups": [{"id": 9, "name": "Dairy"}],
+            "products": [
+                {"id": 1, "name": "Minced beef, frozen 200g"},
+                {"id": 2, "name": "Whole milk"},
+            ],
+        }[entity]
+
+    client.get_objects.side_effect = get_objects
+    client.create_object.return_value = 77
+    return client
+
+
+async def test_product_create_validates_and_creates_with_all_fields(create_client):
+    from grocy_mcp.core.products import product_create_data
+
+    result = await product_create_data(
+        create_client,
+        "  Skyr,   natural ",
+        "pack",
+        "Freezer",
+        product_group="Dairy",
+        default_best_before_days=14,
+        min_stock_amount=2,
+        userfields={"bilkatogo_ids": "19753", "high_churn": 1},
+    )
+    create_client.create_object.assert_called_once_with(
+        "products",
+        {
+            "name": "Skyr, natural",
+            "location_id": 4,
+            "qu_id_stock": 3,
+            "qu_id_purchase": 3,
+            "qu_id_consume": 3,
+            "qu_id_price": 3,
+            "product_group_id": 9,
+            "default_best_before_days": 14,
+            "min_stock_amount": 2,
+        },
+    )
+    create_client.update_userfields.assert_called_once_with(
+        "products", 77, {"bilkatogo_ids": "19753", "high_churn": 1}
+    )
+    assert result == {
+        "created": True,
+        "product_id": 77,
+        "name": "Skyr, natural",
+        "stock_unit": "Pack",
+        "location": "Freezer",
+        "product_group": "Dairy",
+        "userfields_set": ["bilkatogo_ids", "high_churn"],
+    }
+
+
+@pytest.mark.parametrize(
+    "kwargs, expected",
+    [
+        (
+            {"stock_unit": "Litre", "location": "Fridge"},
+            r"Unknown stock unit 'Litre'.*Piece \(2\), Pack \(3\)",
+        ),
+        (
+            {"stock_unit": "Pack", "location": "Cellar"},
+            r"Unknown location 'Cellar'.*Fridge \(2\), Freezer \(4\)",
+        ),
+        (
+            {"stock_unit": "Pack", "location": "2", "product_group": "Meat"},
+            r"Unknown product group 'Meat'.*Dairy \(9\)",
+        ),
+    ],
+)
+async def test_product_create_unknown_references_list_valid_values(create_client, kwargs, expected):
+    from grocy_mcp.core.products import product_create_data
+
+    with pytest.raises(GrocyValidationError, match=expected):
+        await product_create_data(create_client, "New thing", **kwargs)
+    create_client.create_object.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "name, reason",
+    [
+        ("frozen 200g Minced beef", "same name"),
+        ("MINCED BEEF frozen 200G", "same name"),
+        ("Milk whole", "same name"),
+        ("Whole milks", "very similar"),
+    ],
+)
+async def test_product_create_flags_near_duplicates_and_force_overrides(
+    create_client, name, reason
+):
+    from grocy_mcp.core.products import product_create_data
+
+    result = await product_create_data(create_client, name, "Pack", "Fridge")
+    assert result["created"] is False
+    assert reason in result["duplicates"][0]["reason"]
+    create_client.create_object.assert_not_called()
+
+    forced = await product_create_data(create_client, name, "Pack", "Fridge", force=True)
+    assert forced["created"] is True
+
+
+async def test_product_create_does_not_flag_different_products(create_client):
+    from grocy_mcp.core.products import product_create_data
+
+    result = await product_create_data(create_client, "Milk chocolate", "Pack", "Fridge")
+    assert result["created"] is True
+
+
+async def test_product_create_userfield_failure_keeps_the_product_and_warns(create_client):
+    from grocy_mcp.core.products import product_create_data
+
+    create_client.update_userfields.side_effect = GrocyValidationError("no such field")
+    result = await product_create_data(
+        create_client, "Butter", "Pack", "Fridge", userfields={"nope": "x"}
+    )
+    assert result["created"] is True and "userfields_set_tool" in result["warning"]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"name": "  "},
+        {"name": "X", "min_stock_amount": -1},
+        {"name": "X", "min_stock_amount": float("nan")},
+        {"name": "X", "default_best_before_days": -5},
+        {"name": "X", "userfields": ["a"]},
+    ],
+)
+async def test_product_create_validates_inputs_before_any_request(create_client, kwargs):
+    from grocy_mcp.core.products import product_create_data
+
+    with pytest.raises(GrocyValidationError):
+        await product_create_data(create_client, stock_unit="Pack", location="Fridge", **kwargs)
+    create_client.get_objects.assert_not_called()
+    create_client.create_object.assert_not_called()

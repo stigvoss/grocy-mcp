@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import difflib
+import math
+import re
 from typing import Any
 from urllib.parse import unquote_plus
 
@@ -111,4 +114,127 @@ async def products_list_data(
         ):
             continue
         result.append(_select_fields(product, fields) if fields else product)
+    return result
+
+
+_NEAR_DUPLICATE_RATIO = 0.88
+
+
+def _name_key(name: str) -> str:
+    """Case-insensitive name with the words sorted, so word order and punctuation do not matter."""
+    return " ".join(sorted(re.findall(r"\w+", name.casefold())))
+
+
+def find_near_duplicates(name: str, products: list[dict]) -> list[dict]:
+    """Return existing products whose name is the same, or nearly the same, as ``name``."""
+    key = _name_key(name)
+    found = []
+    for product in products:
+        other = _name_key(product.get("name") or "")
+        if not other:
+            continue
+        if other == key:
+            reason = "same name (ignoring case and word order)"
+        elif difflib.SequenceMatcher(None, key, other).ratio() >= _NEAR_DUPLICATE_RATIO:
+            reason = "very similar name"
+        else:
+            continue
+        found.append({"product_id": product["id"], "name": product.get("name"), "reason": reason})
+    return found
+
+
+def _resolve_known(items: list[dict], value: str | int, label: str) -> dict:
+    """Find an item by exact (case-insensitive) name or ID; the error lists the valid values."""
+    text = str(value).strip()
+    for item in items:
+        if str(item["id"]) == text or (item.get("name") or "").casefold() == text.casefold():
+            return item
+    valid = ", ".join(f"{i.get('name')} ({i['id']})" for i in items) or "none defined"
+    raise GrocyValidationError(f"Unknown {label} '{text}'. Valid values: {valid}.")
+
+
+async def product_create_data(
+    client: GrocyClient,
+    name: str,
+    stock_unit: str | int,
+    location: str | int,
+    product_group: str | int | None = None,
+    default_best_before_days: int | None = None,
+    min_stock_amount: float | None = None,
+    userfields: dict[str, Any] | None = None,
+    force: bool = False,
+) -> dict:
+    """Create a complete product in one call, after validating and checking for duplicates.
+
+    The stock unit cannot be changed once a product has had stock, so unit and location are
+    required and must exist. Unless ``force`` is set, nothing is created when the same or a
+    near-duplicate name already exists; the candidates are returned instead.
+    """
+    name = " ".join((name or "").split())
+    if not name:
+        raise GrocyValidationError("name must not be blank.")
+    if default_best_before_days is not None and (
+        not isinstance(default_best_before_days, int) or default_best_before_days < -1
+    ):
+        raise GrocyValidationError("default_best_before_days must be a whole number, or -1.")
+    if min_stock_amount is not None and not (
+        math.isfinite(min_stock_amount) and min_stock_amount >= 0
+    ):
+        raise GrocyValidationError("min_stock_amount must be a finite number, not negative.")
+    if userfields is not None and not (
+        isinstance(userfields, dict) and all(isinstance(k, str) and k for k in userfields)
+    ):
+        raise GrocyValidationError("userfields must map userfield names to values.")
+
+    unit = _resolve_known(await client.get_objects("quantity_units"), stock_unit, "stock unit")
+    place = _resolve_known(await client.get_objects("locations"), location, "location")
+    group = None
+    if product_group is not None:
+        group = _resolve_known(
+            await client.get_objects("product_groups"), product_group, "product group"
+        )
+
+    if not force:
+        duplicates = find_near_duplicates(name, await client.get_objects("products"))
+        if duplicates:
+            return {
+                "created": False,
+                "reason": "A product with the same or a very similar name already exists. "
+                "Use it, or pass force=true to create anyway.",
+                "duplicates": duplicates,
+            }
+
+    data: dict[str, Any] = {
+        "name": name,
+        "location_id": place["id"],
+        "qu_id_stock": unit["id"],
+        "qu_id_purchase": unit["id"],
+        "qu_id_consume": unit["id"],
+        "qu_id_price": unit["id"],
+    }
+    if group is not None:
+        data["product_group_id"] = group["id"]
+    if default_best_before_days is not None:
+        data["default_best_before_days"] = default_best_before_days
+    if min_stock_amount is not None:
+        data["min_stock_amount"] = min_stock_amount
+    product_id = int(await client.create_object("products", data))
+
+    result: dict[str, Any] = {
+        "created": True,
+        "product_id": product_id,
+        "name": name,
+        "stock_unit": unit["name"],
+        "location": place["name"],
+        "product_group": group["name"] if group else None,
+    }
+    if userfields:
+        try:
+            await client.update_userfields("products", product_id, userfields)
+            result["userfields_set"] = sorted(userfields)
+        except GrocyValidationError as error:
+            result["warning"] = (
+                f"Product created, but the userfields were not saved ({error}). "
+                "Set them with userfields_set_tool."
+            )
     return result
