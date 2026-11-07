@@ -2,8 +2,46 @@
 
 from __future__ import annotations
 
+import re
+
 from grocy_mcp.client import GrocyClient
 from grocy_mcp.exceptions import GrocyValidationError
+
+_NOT_NULL = re.compile(r"NOT NULL constraint failed: (\w+)\.(\w+)")
+_UNIQUE = re.compile(r"UNIQUE constraint failed: ((?:\w+\.\w+(?:, )?)+)")
+_FOREIGN_KEY = "FOREIGN KEY constraint failed"
+
+
+def _friendly_constraint_error(entity: str, action: str, error: GrocyValidationError) -> Exception:
+    """Turn a raw Grocy/SQLite constraint failure into a message that says what to do next."""
+    text = str(error)
+    if match := _NOT_NULL.search(text):
+        column = match.group(2)
+        hint = (
+            " Use locations_list_tool or catalog_list_tool to find a valid ID."
+            if column.endswith("_id") or column.startswith("qu_id_")
+            else ""
+        )
+        return GrocyValidationError(
+            f"Cannot {action} {entity}: required field '{column}' is missing. Add it to data "
+            f"and retry; Grocy reports one missing field at a time.{hint}"
+        )
+    if match := _UNIQUE.search(text):
+        columns = [part.split(".")[-1] for part in match.group(1).split(", ")]
+        if len(columns) == 1:
+            what = f"the same '{columns[0]}'"
+        else:
+            what = "the same combination of " + ", ".join(f"'{c}'" for c in columns)
+        return GrocyValidationError(
+            f"Cannot {action} {entity}: a record with {what} already exists. "
+            "Use different values, or update the existing record."
+        )
+    if _FOREIGN_KEY in text:
+        return GrocyValidationError(
+            f"Cannot {action} {entity}: an ID in data refers to a record that does not exist. "
+            "Check the *_id values with the matching list tool."
+        )
+    return error
 
 
 async def system_info(client: GrocyClient) -> str:
@@ -52,7 +90,10 @@ async def entity_manage(
     match action:
         case "create":
             payload = data or {}
-            created_id = await client.create_object(entity, payload)
+            try:
+                created_id = await client.create_object(entity, payload)
+            except GrocyValidationError as e:
+                raise _friendly_constraint_error(entity, "create", e) from e
             return f"Created {entity} object with ID {created_id}."
 
         case "update":
@@ -63,7 +104,10 @@ async def entity_manage(
                 raise GrocyValidationError(
                     "Use userfields_set_tool for userfields; entity updates cannot change them."
                 )
-            await client.update_object(entity, obj_id, payload)
+            try:
+                await client.update_object(entity, obj_id, payload)
+            except GrocyValidationError as e:
+                raise _friendly_constraint_error(entity, "update", e) from e
             return f"Updated {entity} object ID {obj_id}."
 
         case "delete":
