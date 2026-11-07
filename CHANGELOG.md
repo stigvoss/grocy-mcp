@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Product creation**: `product_create_tool` creates a complete product in one call (name, stock
+  unit and default location by name or ID and checked to exist, optional group, best-before days,
+  minimum stock and userfields) and returns near-duplicate candidates instead of creating unless
+  `force` is set
 - **Shopping list notes**: `shopping_list_add_tool` (and `grocy shopping add`) accepts a note-only
   line without a product and an optional `skip_if_present` that does nothing when the product or
   identical note is already listed; the shopping list view shows note-only lines
