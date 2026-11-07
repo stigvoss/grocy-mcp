@@ -5,6 +5,7 @@ from __future__ import annotations
 import difflib
 import math
 import re
+import unicodedata
 from typing import Any
 from urllib.parse import unquote_plus
 
@@ -128,8 +129,13 @@ _WORD_MIN_RATIO = 0.75  # every word must resemble its counterpart at least this
 _WORDS_MEAN_RATIO = 0.87  # and the words must resemble their counterparts this much on average
 
 
+def _nfc(text: str) -> str:
+    """Canonical composed form: 'Pa\u0302te\u0301' and 'Pâté' are the same name."""
+    return unicodedata.normalize("NFC", text)
+
+
 def _words(name: str) -> list[str]:
-    return re.findall(r"\w+", name.casefold())
+    return re.findall(r"\w+", _nfc(name).casefold())
 
 
 def _name_key(name: str) -> str:
@@ -202,7 +208,7 @@ def _words_similar(a: list[str], b: list[str]) -> bool:
 def _plain_name(name: str) -> str:
     """Case-folded name with whitespace collapsed; unlike the word key it keeps every character,
     so names made only of symbols or emoji can still be compared."""
-    return " ".join(name.casefold().split())
+    return " ".join(_nfc(name).casefold().split())
 
 
 def find_near_duplicates(name: str, products: list[dict]) -> list[dict]:
@@ -259,7 +265,7 @@ async def product_create_data(
     required and must exist. Unless ``force`` is set, nothing is created when the same or a
     near-duplicate name already exists; the candidates are returned instead.
     """
-    name = " ".join((name or "").split())
+    name = _nfc(" ".join((name or "").split()))
     if not name:
         raise GrocyValidationError("name must not be blank.")
     if default_best_before_days is not None and (

@@ -492,3 +492,33 @@ async def test_product_create_does_not_create_a_second_emoji_only_product(create
     create_client.create_object.assert_not_called()
     forced = await product_create_data(create_client, "🥛", "Pack", "Fridge", force=True)
     assert forced["created"] is True
+
+
+@pytest.mark.parametrize(
+    "new_name, existing",
+    [
+        ("Pa\u0302te\u0301", "Pâté"),  # decomposed request, composed existing
+        ("Pâté", "Pa\u0302te\u0301"),  # composed request, decomposed existing
+        ("Cre\u0300me bru\u0302le\u0301e", "Crème brûlée"),
+        ("Å", "A\u030a"),  # symbol-free single-letter names too
+    ],
+)
+def test_canonically_equivalent_names_are_duplicates(new_name, existing):
+    from grocy_mcp.core.products import find_near_duplicates
+
+    found = find_near_duplicates(new_name, [{"id": 1, "name": existing}])
+    assert [f["product_id"] for f in found] == [1]
+    assert "same name" in found[0]["reason"]
+
+
+def test_unrelated_accented_names_are_still_different():
+    from grocy_mcp.core.products import find_near_duplicates
+
+    assert find_near_duplicates("Rød", [{"id": 1, "name": "Mælk"}]) == []
+
+
+async def test_product_create_stores_the_composed_form(create_client):
+    from grocy_mcp.core.products import product_create_data
+
+    await product_create_data(create_client, "Cre\u0300me", "Pack", "Fridge")
+    assert create_client.create_object.call_args.args[1]["name"] == "Crème"
