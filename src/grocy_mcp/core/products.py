@@ -25,7 +25,10 @@ def is_truthy_value(value: Any) -> bool:
 
 def userfield_tokens(value: Any) -> list[str]:
     """Split a comma-separated userfield value into trimmed, lower-cased tokens."""
-    return [t.strip().lower() for t in str(value or "").split(",") if t.strip()]
+    # Only None is "no value": a numeric 0 (or False) is a real userfield value
+    return [
+        t.strip().lower() for t in ("" if value is None else str(value)).split(",") if t.strip()
+    ]
 
 
 def userfield_contains(value: Any, needle: str) -> bool:
