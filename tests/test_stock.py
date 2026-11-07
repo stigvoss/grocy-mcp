@@ -817,6 +817,7 @@ async def test_stock_entry_edit_sends_full_entry_with_changes(mock_client):
     from grocy_mcp.core.stock import stock_entry_edit
 
     mock_client.get_stock_entry.return_value = _entry(shopping_location_id=2, note="from market")
+    mock_client.get_objects.return_value = [{"id": 4, "name": "Freezer"}]
     with patch("grocy_mcp.core.stock.resolve_location", return_value=4):
         result = await stock_entry_edit(
             mock_client, 24, price=15.5, best_before_date="2027-01-31", location="Freezer"
@@ -952,6 +953,8 @@ async def test_unknown_numeric_location_is_an_error_not_an_empty_result(mock_cli
         (1.9999996, 2.0, False),  # a shortfall is not rounded away
         (0.9999999999999999, 1.0, True),  # float residue below the request is tolerated
         (1.0, 1.0000001, False),
+        (0.0000004, 0.0000004, True),  # a tiny but real balance is not discarded as noise
+        (0.0000004, 0.0000005, False),
     ],
 )
 async def test_stock_consume_from_location_compares_the_real_balance(
@@ -1026,3 +1029,39 @@ async def test_stock_search_finds_encoded_uppercase_in_userfields(mock_client):
     assert "[1] Beef (userfield: bilkatogo)" in await stock_search(
         mock_client, "oksekød", include_userfields=True
     )
+
+
+async def test_stock_consume_error_hides_noise_rows_but_lists_real_ones(mock_client):
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    mock_client.get_stock_locations.return_value = [
+        {"location_id": 4, "location_name": "Freezer", "amount": 1},
+        {"location_id": 3, "location_name": "Pantry", "amount": 4.4408920985006e-16},
+        {"location_id": 2, "location_name": "Fridge", "amount": 3},
+    ]
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+        patch("grocy_mcp.core.stock.resolve_location", return_value=4),
+        pytest.raises(GrocyValidationError) as exc,
+    ):
+        await stock_consume(mock_client, "Beef", 2.0, from_location="Freezer")
+    assert "Freezer 1, Fridge 3" in str(exc.value) and "Pantry" not in str(exc.value)
+
+
+async def test_entries_and_edit_reject_unknown_numeric_locations(mock_client):
+    from grocy_mcp.core.stock import stock_entries_data, stock_entry_edit
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    async def get_objects(entity, query=None):
+        return {"locations": [{"id": 2, "name": "Fridge"}, {"id": 4, "name": "Freezer"}]}[entity]
+
+    mock_client.get_objects.side_effect = get_objects
+    mock_client.get_stock_entry.return_value = _entry()
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+        pytest.raises(GrocyValidationError, match=r"Unknown location '999'.*Fridge \(2\)"),
+    ):
+        await stock_entries_data(mock_client, "Beef", location="999")
+    with pytest.raises(GrocyValidationError, match=r"Unknown location '999'"):
+        await stock_entry_edit(mock_client, 24, location="999")
+    mock_client.update_stock_entry.assert_not_called()

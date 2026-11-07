@@ -128,3 +128,20 @@ async def test_encoded_uppercase_is_found_by_both_search_paths(userfield_client)
     ]
     found = await products_list_data(userfield_client, userfields_contains={"bilkatogo": "oksekød"})
     assert [p["id"] for p in found] == [9]
+
+
+async def test_userfield_filters_treat_numeric_zero_as_a_value():
+    from grocy_mcp.core.products import userfield_tokens
+
+    client = AsyncMock()
+    client.get_objects.return_value = [
+        {"id": 1, "name": "Zero", "userfields": {"code": 0}},
+        {"id": 2, "name": "One", "userfields": {"code": 1}},
+        {"id": 3, "name": "Unset", "userfields": {"code": None}},
+        {"id": 4, "name": "Flag off", "userfields": {"code": False}},
+    ]
+    assert userfield_tokens(0) == ["0"] and userfield_tokens(None) == []
+    matched = await products_list_data(client, userfields_match={"code": "0"})
+    assert [p["id"] for p in matched] == [1]
+    contained = await products_list_data(client, userfields_contains={"code": "0"})
+    assert [p["id"] for p in contained] == [1]
