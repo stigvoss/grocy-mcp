@@ -63,16 +63,20 @@ async def stock_expiring(client: GrocyClient) -> str:
     return "\n".join(lines)
 
 
-# asyncio.Lock objects belong to one event loop, so the registry is keyed by the running loop
-# (weakly, so a closed loop and its locks are dropped) and then by product.
-_inventory_locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[int, asyncio.Lock]] = (
-    weakref.WeakKeyDictionary()
-)
+# asyncio.Lock objects belong to one event loop, so the registry is keyed by the running loop.
+# Both levels are weak: a closed loop and idle locks are dropped, while a caller that is
+# waiting for or holding a lock keeps it alive for the duration of its ``async with``.
+_inventory_locks: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, weakref.WeakValueDictionary[int, asyncio.Lock]
+] = weakref.WeakKeyDictionary()
 
 
 def _inventory_lock(product_id: int) -> asyncio.Lock:
-    locks = _inventory_locks.setdefault(asyncio.get_running_loop(), {})
-    return locks.setdefault(product_id, asyncio.Lock())
+    locks = _inventory_locks.setdefault(asyncio.get_running_loop(), weakref.WeakValueDictionary())
+    lock = locks.get(product_id)
+    if lock is None:
+        lock = locks[product_id] = asyncio.Lock()
+    return lock
 
 
 def _split_amounts(info: dict) -> tuple[float, float, float]:

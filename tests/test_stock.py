@@ -580,3 +580,22 @@ def test_stock_inventory_locks_work_across_successive_event_loops():
 
     assert run_once().opened == 1
     assert run_once().opened == 1
+
+
+def test_stock_inventory_locks_are_not_retained_after_use():
+    import gc
+
+    from grocy_mcp.core import stock as stock_module
+
+    client = _FakeStockClient(total=3, opened=0)
+
+    async def both():
+        with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+            await asyncio.gather(
+                stock_inventory(client, "Milk", 2.0, opened_amount=1),
+                stock_inventory(client, "Milk", 2.0, opened_amount=1),
+            )
+
+    asyncio.run(both())
+    gc.collect()
+    assert all(len(locks) == 0 for locks in stock_module._inventory_locks.values())
