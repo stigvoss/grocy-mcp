@@ -103,14 +103,21 @@ async def stock_product_info(client: GrocyClient, product: str) -> str:
     total, opened, unopened = _split_amounts(info)
     best_before = info.get("next_best_before_date", "unknown")
     unit = (info.get("quantity_unit_stock") or {}).get("name", "unknown")
-    location = (info.get("location") or {}).get("name", "unknown")
+    default_location = (info.get("location") or {}).get("name", "unknown")
+    where = []
+    for row in await client.get_stock_locations(product_id):
+        amount = tidy_amount(row.get("amount"))
+        if amount:
+            where.append(f"{row.get('location_name', '?')} {format_amount(amount)}")
 
     return (
         f"Product: {name}\n"
         f"  In stock: {format_amount(total)} {unit}\n"
         f"  Unopened: {format_amount(unopened)}\n"
         f"  Opened: {format_amount(opened)}\n"
-        f"  Location: {location}\n"
+        f"  Stock locations: {', '.join(where) if where else 'none'}\n"
+        f"  Default location (where new stock goes, not necessarily where it is): "
+        f"{default_location}\n"
         f"  Next best before: {best_before}"
     )
 
@@ -290,6 +297,7 @@ async def stock_levels_data(
     client: GrocyClient,
     product_group: str | None = None,
     high_churn: bool | None = None,
+    location: str | None = None,
 ) -> list[dict]:
     """Return every active product with its stock amount, including products at 0 stock.
 
@@ -300,7 +308,19 @@ async def stock_levels_data(
         client: Grocy client.
         product_group: Product group name or numeric ID to filter on.
         high_churn: When set, keep only products whose ``high_churn`` userfield matches.
+        location: Location name or ID; keeps only products with stock there and adds
+            ``amount_in_location``.
     """
+    in_location: dict[int, float] | None = None
+    if location is not None:
+        location_id = await resolve_location(client, location)
+        in_location = {}
+        for row in await client.get_objects("stock_current_locations"):
+            if row.get("location_id") == location_id:
+                in_location[row["product_id"]] = in_location.get(row["product_id"], 0.0) + float(
+                    row.get("amount") or 0
+                )
+        in_location = {pid: amt for pid, amt in in_location.items() if tidy_amount(amt)}
     products = await client.get_objects("products")
     stock = await client.get_stock()
     units = {u["id"]: u.get("name") for u in await client.get_objects("quantity_units")}
@@ -335,21 +355,69 @@ async def stock_levels_data(
             continue
         if group_id is not None and product.get("product_group_id") != group_id:
             continue
+        if in_location is not None and product["id"] not in in_location:
+            continue
         churn = is_truthy_value((product.get("userfields") or {}).get("high_churn"))
         if high_churn is not None and churn != high_churn:
             continue
+        row = {
+            "product_id": product["id"],
+            "name": product.get("name"),
+            "amount": tidy_amount(amounts.get(product["id"], 0.0)),
+            "amount_aggregated": tidy_amount(aggregated.get(product["id"], 0.0)),
+            "stock_unit": units.get(product.get("qu_id_stock")),
+            "default_location": locations.get(product.get("location_id")),
+            "product_group_id": product.get("product_group_id"),
+            "high_churn": churn,
+        }
+        if in_location is not None:
+            row["amount_in_location"] = tidy_amount(in_location[product["id"]])
+        result.append(row)
+    return result
+
+
+async def stock_by_location_data(
+    client: GrocyClient,
+    location: str | None = None,
+    freezer_only: bool = False,
+) -> list[dict]:
+    """Return the stock held at each location, with product names.
+
+    Unlike the product's default location, this is where the stock actually is. Rows that round
+    to zero (float residue) are left out.
+
+    Args:
+        client: Grocy client.
+        location: Location name or numeric ID; all locations when omitted.
+        freezer_only: Keep only freezer locations.
+    """
+    location_id = await resolve_location(client, location) if location is not None else None
+    rows = await client.get_objects("stock_current_locations")
+    products = {p["id"]: p for p in await client.get_objects("products")}
+    units = {u["id"]: u.get("name") for u in await client.get_objects("quantity_units")}
+
+    result = []
+    for row in rows:
+        amount = tidy_amount(row.get("amount"))
+        if not amount:
+            continue
+        if location_id is not None and row.get("location_id") != location_id:
+            continue
+        is_freezer = bool(int(row.get("location_is_freezer") or 0))
+        if freezer_only and not is_freezer:
+            continue
+        product = products.get(row.get("product_id"), {})
         result.append(
             {
-                "product_id": product["id"],
-                "name": product.get("name"),
-                "amount": tidy_amount(amounts.get(product["id"], 0.0)),
-                "amount_aggregated": tidy_amount(aggregated.get(product["id"], 0.0)),
+                "product_id": row.get("product_id"),
+                "name": product.get("name", f"Product {row.get('product_id')}"),
+                "amount": amount,
                 "stock_unit": units.get(product.get("qu_id_stock")),
-                "default_location": locations.get(product.get("location_id")),
-                "product_group_id": product.get("product_group_id"),
-                "high_churn": churn,
+                "location": row.get("location_name"),
+                "is_freezer": is_freezer,
             }
         )
+    result.sort(key=lambda r: ((r["location"] or ""), (r["name"] or "").lower()))
     return result
 
 

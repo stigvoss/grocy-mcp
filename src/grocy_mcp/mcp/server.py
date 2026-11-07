@@ -90,6 +90,7 @@ from grocy_mcp.core.shopping import (
 from grocy_mcp.core.stock import (
     stock_add,
     stock_barcode_lookup,
+    stock_by_location_data,
     stock_consume,
     stock_expiring,
     stock_inventory,
@@ -147,7 +148,9 @@ def create_mcp_server() -> FastMCP:
 
     @mcp.tool()
     async def stock_levels_tool(
-        product_group: str | None = None, high_churn: bool | None = None
+        product_group: str | None = None,
+        high_churn: bool | None = None,
+        location: str | None = None,
     ) -> list[dict]:
         """List all active products with their stock amount, including products at 0 stock.
 
@@ -160,9 +163,29 @@ def create_mcp_server() -> FastMCP:
             product_group: Optional product group name or numeric ID to filter on.
             high_churn: Optional; True keeps only products whose high_churn userfield is
                         set, False only those where it is not.
+            location: Optional location name or ID; keeps only products with stock there and
+                      adds amount_in_location (their stock at that location).
         """
         async with _get_client() as client:
-            return await stock_levels_data(client, product_group, high_churn)
+            return await stock_levels_data(client, product_group, high_churn, location)
+
+    @mcp.tool()
+    async def stock_by_location_tool(
+        location: str | None = None, freezer_only: bool = False
+    ) -> list[dict]:
+        """List what is actually stored where: product name, amount and unit per location.
+
+        Answers "what is in the freezer?" and "where is this product?". A product's default
+        location (shown by stock_product_info_tool) is where new stock goes, which is not
+        necessarily where the stock sits. Rows are sorted by location, then product.
+
+        Args:
+            location: Optional location name (e.g. "Freezer") or numeric ID; all locations
+                      when omitted.
+            freezer_only: Only freezer locations.
+        """
+        async with _get_client() as client:
+            return await stock_by_location_data(client, location, freezer_only)
 
     @mcp.tool()
     async def products_list_tool(
@@ -195,8 +218,9 @@ def create_mcp_server() -> FastMCP:
     async def stock_product_info_tool(product: str) -> str:
         """Get detailed stock information for a single product.
 
-        Returns current amount with stock unit, unopened and opened amounts, default
-        location, and next best-before date.
+        Returns current amount with stock unit, unopened and opened amounts, the locations
+        that hold the stock, the default location (where new stock goes, not necessarily where
+        it is) and the next best-before date.
 
         Args:
             product: Product name (e.g. "Milk") or numeric product ID.
