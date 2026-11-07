@@ -91,3 +91,16 @@ async def test_usage_stats_rejects_bad_window_before_any_request(client, days):
     with pytest.raises(GrocyValidationError, match="days"):
         await stock_usage_stats_data(client, "Milk", days=days, now=NOW)
     client.get_objects.assert_not_called()
+
+
+async def test_usage_stats_same_day_events_count_as_zero_day_gaps(client):
+    client.get_objects.return_value = [
+        _row("2026-10-01", "purchase", 1),
+        {**_row("2026-10-11", "purchase", 1), "row_created_timestamp": "2026-10-11 09:00:00"},
+        {**_row("2026-10-11", "purchase", 1), "row_created_timestamp": "2026-10-11 18:00:00"},
+    ]
+    with patch("grocy_mcp.core.stock_usage.resolve_product", return_value=7):
+        stats = await stock_usage_stats_data(client, "Milk", days=90, now=NOW)
+    assert stats["purchases"]["count"] == 3
+    assert stats["purchases"]["median_gap_days"] == 5.0  # gaps of 10 and 0 days
+    assert stats["purchases"]["last_gap_days"] == 0

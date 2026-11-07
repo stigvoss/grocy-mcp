@@ -111,3 +111,20 @@ async def test_userfield_filters_combine_and_validate(userfield_client):
     for bad in ({"bilkatogo_ids": ""}, {"": 5}, "x"):
         with pytest.raises(GrocyValidationError):
             await products_list_data(userfield_client, userfields_match=bad)
+
+
+def test_userfield_contains_lowercases_after_url_decoding():
+    from grocy_mcp.core.products import userfield_contains
+
+    assert userfield_contains("https://x/?query=OKSEK%C3%98D", "oksekød")
+    assert userfield_contains("https://x/?query=hakket%20OKSEK%C3%98D", "HAKKET oksekØd")
+    assert userfield_contains("OKSEK%c3%98d", "oksekød")
+    assert not userfield_contains("https://x/?query=mælk", "oksekød")
+
+
+async def test_encoded_uppercase_is_found_by_both_search_paths(userfield_client):
+    userfield_client.get_objects.return_value = [
+        {"id": 9, "name": "Beef", "userfields": {"bilkatogo": "https://x/?query=OKSEK%C3%98D"}}
+    ]
+    found = await products_list_data(userfield_client, userfields_contains={"bilkatogo": "oksekød"})
+    assert [p["id"] for p in found] == [9]

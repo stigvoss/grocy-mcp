@@ -816,7 +816,7 @@ def _entry(**over):
 async def test_stock_entry_edit_sends_full_entry_with_changes(mock_client):
     from grocy_mcp.core.stock import stock_entry_edit
 
-    mock_client.get_stock_entry.return_value = _entry(shopping_location_id=2)
+    mock_client.get_stock_entry.return_value = _entry(shopping_location_id=2, note="from market")
     with patch("grocy_mcp.core.stock.resolve_location", return_value=4):
         result = await stock_entry_edit(
             mock_client, 24, price=15.5, best_before_date="2027-01-31", location="Freezer"
@@ -830,6 +830,7 @@ async def test_stock_entry_edit_sends_full_entry_with_changes(mock_client):
             "location_id": 4,
             "open": 0,
             "shopping_location_id": 2,
+            "note": "from market",
             "price": 15.5,
         },
     )
@@ -929,3 +930,99 @@ async def test_stock_search_matches_userfields_when_asked(mock_client):
     # name matches are not tagged and are not duplicated
     both = await stock_search(mock_client, "minced", include_userfields=True)
     assert both.count("Minced beef") == 1 and "userfield" not in both
+
+
+async def test_unknown_numeric_location_is_an_error_not_an_empty_result(mock_client):
+    from grocy_mcp.core.stock import stock_by_location_data, stock_levels_data
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    client = _location_client(mock_client)
+    for call in (
+        lambda: stock_by_location_data(client, location="999"),
+        lambda: stock_levels_data(client, location="999"),
+    ):
+        with pytest.raises(GrocyValidationError, match=r"Unknown location '999'.*Fridge \(2\)"):
+            await call()
+
+
+@pytest.mark.parametrize(
+    "held, requested, allowed",
+    [
+        (0.1234564, 0.1234564, True),  # exactly what is held is never refused
+        (1.9999996, 2.0, False),  # a shortfall is not rounded away
+        (0.9999999999999999, 1.0, True),  # float residue below the request is tolerated
+        (1.0, 1.0000001, False),
+    ],
+)
+async def test_stock_consume_from_location_compares_the_real_balance(
+    mock_client, held, requested, allowed
+):
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    mock_client.get_stock_locations.return_value = [
+        {"location_id": 4, "location_name": "Freezer", "amount": held}
+    ]
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+        patch("grocy_mcp.core.stock.resolve_location", return_value=4),
+    ):
+        if allowed:
+            await stock_consume(mock_client, "Beef", requested, from_location="Freezer")
+            mock_client.consume_stock.assert_called_once()
+        else:
+            with pytest.raises(GrocyValidationError, match="holds"):
+                await stock_consume(mock_client, "Beef", requested, from_location="Freezer")
+            mock_client.consume_stock.assert_not_called()
+
+
+async def test_stock_entry_edit_keeps_the_note_on_a_price_only_edit(mock_client):
+    from grocy_mcp.core.stock import stock_entry_edit
+
+    mock_client.get_stock_entry.return_value = _entry(note="freeze on arrival")
+    await stock_entry_edit(mock_client, 24, price=2.5)
+    assert mock_client.update_stock_entry.call_args.args[1]["note"] == "freeze on arrival"
+
+
+class _FakeEntryClient:
+    """Stateful stand-in: a PUT replaces the entry with exactly what it was sent."""
+
+    def __init__(self):
+        self.entry = _entry(amount=1, price=None)
+
+    async def get_stock_entry(self, entry_id):
+        await asyncio.sleep(0)
+        return dict(self.entry)
+
+    async def update_stock_entry(self, entry_id, payload):
+        await asyncio.sleep(0)
+        self.entry = {**self.entry, **payload}
+
+
+async def test_stock_entry_edit_overlapping_edits_do_not_overwrite_each_other():
+    from grocy_mcp.core.stock import stock_entry_edit
+
+    client = _FakeEntryClient()
+    await asyncio.gather(
+        stock_entry_edit(client, 24, amount=5),
+        stock_entry_edit(client, 24, price=9.5),
+    )
+    assert client.entry["amount"] == 5 and client.entry["price"] == 9.5
+
+
+async def test_stock_search_finds_encoded_uppercase_in_userfields(mock_client):
+    async def get_objects(entity, query=None):
+        return {
+            "products": [
+                {
+                    "id": 1,
+                    "name": "Beef",
+                    "userfields": {"bilkatogo": "https://x/?query=OKSEK%C3%98D"},
+                }
+            ],
+            "product_barcodes": [],
+        }[entity]
+
+    mock_client.get_objects.side_effect = get_objects
+    assert "[1] Beef (userfield: bilkatogo)" in await stock_search(
+        mock_client, "oksekød", include_userfields=True
+    )

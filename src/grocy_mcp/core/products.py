@@ -32,9 +32,10 @@ def userfield_contains(value: Any, needle: str) -> bool:
     """Case-insensitive substring match, also against the URL-decoded value (query=hakket%20...)."""
     if value is None:
         return False
-    text = str(value).lower()
+    # Decode before lowercasing: %C3%98 decodes to "Ø", which only lowercases once it is decoded.
+    raw = str(value)
     needle = needle.strip().lower()
-    return bool(needle) and (needle in text or needle in unquote_plus(text))
+    return bool(needle) and (needle in raw.lower() or needle in unquote_plus(raw).lower())
 
 
 def _select_fields(product: dict, fields: list[str]) -> dict:
