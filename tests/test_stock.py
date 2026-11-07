@@ -1207,3 +1207,41 @@ async def test_entry_edit_writes_when_the_entry_is_unchanged(mock_client):
     mock_client.get_stock_entry.return_value = _entry(amount=2)
     await stock_entry_edit(mock_client, 24, price=9.5)
     mock_client.update_stock_entry.assert_awaited_once()
+
+
+async def test_stock_search_with_many_userfield_matches_keeps_order_and_has_no_duplicates(
+    mock_client,
+):
+    products = [
+        {"id": i, "name": f"Item {i}", "userfields": {"bilkatogo": "https://shop/x"}}
+        for i in range(1, 2001)
+    ]
+    products[4]["name"] = "https cheese"  # matched by name and by userfield
+    barcodes = [{"product_id": 7, "barcode": "https-123"}]  # matched by barcode and userfield
+
+    async def get_objects(entity, query=None):
+        return {"products": products, "product_barcodes": barcodes}[entity]
+
+    mock_client.get_objects.side_effect = get_objects
+    result = await stock_search(mock_client, "https", include_userfields=True)
+    ids = [int(line.split("]")[0].split("[")[1]) for line in result.splitlines()[1:]]
+    assert len(ids) == len(set(ids)) == 2000
+    assert ids[0] == 5  # the name match comes first, then the rest in product order
+    assert result.count("[7] Item 7") == 1
+
+
+async def test_stock_search_userfield_scan_is_linear_not_quadratic(mock_client):
+    import time
+
+    products = [
+        {"id": i, "name": f"P{i}", "userfields": {"link": "https://shop"}} for i in range(1, 6001)
+    ]
+
+    async def get_objects(entity, query=None):
+        return {"products": products, "product_barcodes": []}[entity]
+
+    mock_client.get_objects.side_effect = get_objects
+    start = time.perf_counter()
+    result = await stock_search(mock_client, "https", include_userfields=True)
+    assert result.count("\n") == 6000
+    assert time.perf_counter() - start < 3.0  # ~18 million dict comparisons would not fit

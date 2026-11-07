@@ -500,13 +500,15 @@ async def stock_search(client: GrocyClient, query: str, include_userfields: bool
     products = await client.get_objects("products")
     query_lower = query.lower()
     matches = [p for p in products if query_lower in p.get("name", "").lower()]
+    matched_ids = {p["id"] for p in matches}  # constant-time membership, however many match
     via: dict[int, list[str]] = {}
 
     barcodes = await client.get_objects("product_barcodes")
     barcode_ids = {b["product_id"] for b in barcodes if query_lower in b.get("barcode", "").lower()}
     for p in products:
-        if p["id"] in barcode_ids and p not in matches:
+        if p["id"] in barcode_ids and p["id"] not in matched_ids:
             matches.append(p)
+            matched_ids.add(p["id"])
 
     if include_userfields:
         for p in products:
@@ -517,8 +519,9 @@ async def stock_search(client: GrocyClient, query: str, include_userfields: bool
             ]
             if fields:
                 via[p["id"]] = fields
-                if p not in matches:
+                if p["id"] not in matched_ids:
                     matches.append(p)
+                    matched_ids.add(p["id"])
 
     if not matches:
         return f"No products found matching '{query}'."
