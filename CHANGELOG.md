@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Usage summary**: `stock_usage_stats_tool(product, days=90)` returns purchases (count, amount,
+  dates, spend, average price), consumes (spoiled kept apart), opens, average daily use, median and
+  last gap in days between events, days since the last movement and current stock
 - **Finding products by userfield content**: `stock_search_tool` takes `include_userfields` (matches
   userfield text incl. URL-decoded store links and says which field matched);
   `products_list_tool` takes `userfields_match` (comma-separated token, whitespace trimmed) and
