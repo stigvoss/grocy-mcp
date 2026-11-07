@@ -125,3 +125,14 @@ async def test_stock_journal_rounds_amounts():
     assert "purchase 0.3 " in result
     assert "consume -4 " in result
     assert "hidden" not in result
+
+
+async def test_stock_journal_keeps_large_and_precise_amounts():
+    client = AsyncMock()
+    client.get_objects.side_effect = [
+        [_entry(1, 12.345678, "purchase"), _entry(2, 1234567, "purchase")],
+        [{"id": 1, "name": "Flour"}],
+    ]
+    result = await stock_journal(client)
+    assert "purchase 12.345678 " in result
+    assert "purchase 1234567 " in result

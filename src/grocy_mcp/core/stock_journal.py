@@ -16,6 +16,11 @@ def _tidy_amount(value: object) -> float | None:
         return None
 
 
+def _format_amount(value: float) -> str:
+    """Format with up to six decimals and no trailing zeros (``g`` would cut significant digits)."""
+    return f"{value:.{_AMOUNT_DECIMALS}f}".rstrip("0").rstrip(".")
+
+
 async def stock_journal(client: GrocyClient, product: str | None = None) -> str:
     """Return recent stock journal entries, optionally filtered by product."""
     entries = await client.get_objects("stock_log")
@@ -46,7 +51,7 @@ async def stock_journal(client: GrocyClient, product: str | None = None) -> str:
     for entry in entries:
         prod_name = product_map.get(entry.get("product_id"), f"Product {entry.get('product_id')}")
         tidy = _tidy_amount(entry.get("amount"))
-        amount = f"{tidy:g}" if tidy is not None else entry.get("amount", "?")
+        amount = _format_amount(tidy) if tidy is not None else entry.get("amount", "?")
         txn_type = entry.get("transaction_type", "?")
         timestamp = entry.get("row_created_timestamp", "?")
         lines.append(f"  [{entry.get('id', '?')}] {prod_name} — {txn_type} {amount} — {timestamp}")
