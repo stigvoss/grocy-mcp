@@ -1140,3 +1140,23 @@ async def test_opening_overlapping_a_price_only_edit_is_not_silently_undone():
             await asyncio.gather(*(calls[name] for name in order))
         assert client.entry["open"] == 1, f"open was undone (started with {first})"
         assert client.entry["price"] == 9.5
+
+
+async def test_entry_edit_refuses_to_write_when_the_entry_changed_since_it_was_read(mock_client):
+    from grocy_mcp.core.stock import stock_entry_edit
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    # reads: the product lookup, the read under the lock, then the check just before writing;
+    # e.g. a recipe consumption lowered the entry after the read under the lock
+    mock_client.get_stock_entry.side_effect = [_entry(amount=2), _entry(amount=2), _entry(amount=1)]
+    with pytest.raises(GrocyValidationError, match="changed while it was being edited"):
+        await stock_entry_edit(mock_client, 24, price=9.5)
+    mock_client.update_stock_entry.assert_not_called()
+
+
+async def test_entry_edit_writes_when_the_entry_is_unchanged(mock_client):
+    from grocy_mcp.core.stock import stock_entry_edit
+
+    mock_client.get_stock_entry.return_value = _entry(amount=2)
+    await stock_entry_edit(mock_client, 24, price=9.5)
+    mock_client.update_stock_entry.assert_awaited_once()

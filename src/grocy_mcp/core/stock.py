@@ -94,7 +94,9 @@ def _product_lock(product_id: int) -> asyncio.Lock:
 
     Inventory, consume, transfer and entry edits all read the state and write back a result
     derived from it, so an overlapping pair could otherwise undo each other (an edit that
-    restores a unit a consume just took). It covers calls within this server process.
+    restores a unit a consume just took). It covers the tools of this server process only;
+    recipe consumption (Grocy chooses the products), the Grocy UI and other clients are not
+    coordinated, which is why the entry edit also re-checks the entry just before writing.
     """
     return _keyed_lock(_product_locks, product_id)
 
@@ -612,6 +614,15 @@ async def stock_entry_edit(
         )
         payload = {k: current[k] for k in keep if current.get(k) is not None}
         payload.update(changes)
+        # The product lock only coordinates the tools of this server. Something else (a recipe
+        # consumption, the Grocy UI, another client) may still have changed the entry since it
+        # was read, and the PUT would write the stale values back; check just before writing.
+        if await client.get_stock_entry(entry_id) != current:
+            raise GrocyValidationError(
+                f"Stock entry {entry_id} changed while it was being edited (by another tool or "
+                "in Grocy), so nothing was written. List the entries again with "
+                "stock_entries_tool and repeat the edit."
+            )
         await client.update_stock_entry(entry_id, payload)
 
     def show(value: object) -> str:
