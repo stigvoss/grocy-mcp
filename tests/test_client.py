@@ -275,3 +275,9 @@ async def test_add_shopping_list_item_without_product_sends_no_product_id(client
         "shopping_list_id": 1,
         "note": "Spinat",
     }
+
+
+async def test_get_stock_entry_null_response_is_not_found(client, mock_api):
+    mock_api.get("/stock/entry/999").mock(return_value=httpx.Response(200, content=b"null"))
+    with pytest.raises(GrocyNotFoundError, match="may have been consumed"):
+        await client.get_stock_entry(999)

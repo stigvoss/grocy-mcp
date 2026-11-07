@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from grocy_mcp.core.stock import StockOutcome
 from grocy_mcp.core.workflows import (
     workflow_match_products_preview_data,
     workflow_shopping_reconcile_apply_data,
@@ -265,8 +266,14 @@ async def test_workflow_stock_apply_runs_every_action_and_reports_each():
     client = AsyncMock()
     with (
         patch("grocy_mcp.core.stock.stock_consume", AsyncMock(return_value="Consumed")) as consume,
-        patch("grocy_mcp.core.stock.stock_open", AsyncMock(return_value="Opened")) as open_,
-        patch("grocy_mcp.core.stock.stock_inventory", AsyncMock(return_value="Inv")) as inv,
+        patch(
+            "grocy_mcp.core.stock.stock_open_outcome",
+            AsyncMock(return_value=StockOutcome(True, "Opened")),
+        ) as open_,
+        patch(
+            "grocy_mcp.core.stock.stock_inventory_outcome",
+            AsyncMock(return_value=StockOutcome(True, "Inv")),
+        ) as inv,
         patch("grocy_mcp.core.stock.stock_transfer", AsyncMock(return_value="Moved")) as transfer,
     ):
         result = await workflow_stock_apply_data(
@@ -295,7 +302,10 @@ async def test_workflow_stock_apply_failing_action_does_not_abort_the_rest():
             "grocy_mcp.core.stock.stock_consume",
             AsyncMock(side_effect=[GrocyValidationError("holds 0"), "Consumed"]),
         ),
-        patch("grocy_mcp.core.stock.stock_open", AsyncMock(return_value="Opened")),
+        patch(
+            "grocy_mcp.core.stock.stock_open_outcome",
+            AsyncMock(return_value=StockOutcome(True, "Opened")),
+        ),
     ):
         result = await workflow_stock_apply_data(
             client,
@@ -312,7 +322,10 @@ async def test_workflow_stock_apply_failing_action_does_not_abort_the_rest():
 
 async def test_workflow_stock_apply_invalid_items_are_reported_by_index():
     client = AsyncMock()
-    with patch("grocy_mcp.core.stock.stock_open", AsyncMock(return_value="Opened")) as open_:
+    with patch(
+        "grocy_mcp.core.stock.stock_open_outcome",
+        AsyncMock(return_value=StockOutcome(True, "Opened")),
+    ) as open_:
         result = await workflow_stock_apply_data(
             client,
             [
@@ -341,7 +354,10 @@ async def test_workflow_stock_apply_text_summary():
     from grocy_mcp.core.workflows import workflow_stock_apply
 
     client = AsyncMock()
-    with patch("grocy_mcp.core.stock.stock_open", AsyncMock(return_value="Opened 1 of 'Milk'.")):
+    with patch(
+        "grocy_mcp.core.stock.stock_open_outcome",
+        AsyncMock(return_value=StockOutcome(True, "Opened 1 of 'Milk'.")),
+    ):
         text = await workflow_stock_apply(client, [{"action": "open", "product": "Milk"}])
     assert "1 applied, 0 failed" in text and "[0] open Milk: ok" in text
 
@@ -366,3 +382,83 @@ async def test_workflow_stock_apply_strips_grocy_json_wrapper_and_names_unknown_
     assert "unknown action 'explode'" in result["results"][1]["error"]
     assert "consume, open, inventory, transfer" in result["results"][1]["error"]
     assert "unknown action None" in result["results"][2]["error"]
+
+
+async def test_workflow_stock_apply_refused_open_is_not_reported_as_applied():
+    client = AsyncMock()
+    client.get_stock_product.return_value = {
+        "product": {"name": "Milk"},
+        "stock_amount": 1,
+        "stock_amount_opened": 1,
+    }
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await workflow_stock_apply_data(client, [{"action": "open", "product": "Milk"}])
+    client.open_stock.assert_not_called()
+    assert result["applied_count"] == 0 and result["failed_count"] == 1
+    assert result["results"][0]["ok"] is False
+    assert "Cannot open 1 of 'Milk'" in result["results"][0]["error"]
+
+
+async def test_workflow_stock_apply_grocy_rejected_open_is_a_failure():
+    client = AsyncMock()
+    client.get_stock_product.return_value = {
+        "product": {"name": "Milk"},
+        "stock_amount": 2,
+        "stock_amount_opened": 0,
+    }
+    client.open_stock.side_effect = GrocyValidationError("Validation error: no")
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await workflow_stock_apply_data(client, [{"action": "open", "product": "Milk"}])
+    assert result["results"][0]["ok"] is False and result["failed_count"] == 1
+
+
+async def test_workflow_stock_apply_incomplete_inventory_is_partial_not_applied():
+    client = AsyncMock()
+    # total adjusted 3 -> 2, but opening the missing unit fails: the total change is kept
+    client.get_stock_product.side_effect = [
+        {"stock_amount": 3, "stock_amount_opened": 1},
+        {"stock_amount": 2, "stock_amount_opened": 0},
+        {"stock_amount": 2, "stock_amount_opened": 0},
+    ]
+    client.open_stock.side_effect = GrocyValidationError("Validation error: no")
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await workflow_stock_apply_data(
+            client,
+            [{"action": "inventory", "product": "Milk", "new_amount": 2, "opened_amount": 1}],
+        )
+    client.inventory_stock.assert_awaited_once()
+    entry = result["results"][0]
+    assert entry["ok"] is False and entry["partial"] is True
+    assert "inventory was applied" in entry["error"] and "unopened 2, opened 0" in entry["error"]
+    assert result["applied_count"] == 0 and result["failed_count"] == 1
+
+
+async def test_workflow_stock_apply_inventory_that_cannot_unopen_is_partial():
+    client = AsyncMock()
+    client.get_stock_product.side_effect = [
+        {"stock_amount": 3, "stock_amount_opened": 2},
+        {"stock_amount": 2, "stock_amount_opened": 2},
+    ]
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await workflow_stock_apply_data(
+            client,
+            [{"action": "inventory", "product": "Milk", "new_amount": 2, "opened_amount": 1}],
+        )
+    assert result["results"][0]["ok"] is False and result["results"][0]["partial"] is True
+    assert "cannot un-open" in result["results"][0]["error"]
+
+
+async def test_workflow_stock_apply_complete_inventory_is_ok():
+    client = AsyncMock()
+    client.get_stock_product.side_effect = [
+        {"stock_amount": 3, "stock_amount_opened": 0},
+        {"stock_amount": 2, "stock_amount_opened": 0},
+        {"stock_amount": 2, "stock_amount_opened": 1},
+    ]
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await workflow_stock_apply_data(
+            client,
+            [{"action": "inventory", "product": "Milk", "new_amount": 2, "opened_amount": 1}],
+        )
+    assert result["results"][0]["ok"] is True and "partial" not in result["results"][0]
+    assert result["applied_count"] == 1

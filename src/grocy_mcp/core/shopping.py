@@ -27,7 +27,7 @@ async def shopping_list_view(client: GrocyClient, list_id: int = 1) -> str:
         amount = item.get("amount", 1)
         note = item.get("note")
         if product_id is None:
-            line = f"  [{item['id']}] {note or '(empty note)'} — note"
+            line = f"  [{item['id']}] {note or '(empty note)'} — {amount} (note)"
         else:
             name = name_map.get(product_id, f"Product {product_id}")
             line = f"  [{item['id']}] {name} — {amount}"

@@ -15,8 +15,8 @@ _MAX_DAYS = 3650
 
 
 def _gaps_in_days(dates: list[datetime]) -> list[int]:
-    """Whole days between consecutive distinct event dates (oldest first)."""
-    days = sorted({d.date() for d in dates})
+    """Whole days between consecutive events (oldest first); same-day events give a gap of 0."""
+    days = sorted(d.date() for d in dates)
     return [(b - a).days for a, b in itertools.pairwise(days)]
 
 

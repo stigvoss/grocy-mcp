@@ -208,3 +208,15 @@ async def test_entity_list_other_entities_are_not_filtered(mock_client):
     mock_client.get_objects.return_value = [{"id": 1, "name": "A", "amount": 0}]
     result = await entity_list(mock_client, "products")
     assert "hidden" not in result
+
+
+def test_format_amount_never_shows_negative_zero():
+    from grocy_mcp.core.utils import format_amount
+
+    assert format_amount(-2.2204460492503e-16) == "0"
+    assert format_amount(4.4408920985006e-16) == "0"
+    assert format_amount(-0.0) == "0"
+    assert format_amount(1.0000000000000007) == "1"
+    assert format_amount(-1.5) == "-1.5"
+    assert format_amount(12.345678) == "12.345678"
+    assert format_amount(1234567) == "1234567"

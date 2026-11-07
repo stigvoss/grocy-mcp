@@ -124,7 +124,13 @@ class GrocyClient:
 
     async def get_stock_entry(self, entry_id: int) -> dict:
         resp = await self._request("GET", f"/stock/entry/{entry_id}")
-        return resp.json()
+        entry = resp.json()
+        if entry is None:  # Grocy answers 200 with JSON null for an unknown or consumed entry
+            raise GrocyNotFoundError(
+                f"Stock entry {entry_id} not found; it may have been consumed. "
+                "List current entries with stock_entries_tool."
+            )
+        return entry
 
     async def update_stock_entry(self, entry_id: int, data: dict) -> Any:
         resp = await self._request("PUT", f"/stock/entry/{entry_id}", json=data)
