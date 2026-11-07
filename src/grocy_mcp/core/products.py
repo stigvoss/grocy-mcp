@@ -90,10 +90,13 @@ async def products_list_data(
         if mapping is not None and not (
             isinstance(mapping, dict)
             and all(
-                isinstance(k, str) and isinstance(v, str) and v.strip() for k, v in mapping.items()
+                isinstance(k, str) and k.strip() and isinstance(v, str) and v.strip()
+                for k, v in mapping.items()
             )
         ):
-            raise GrocyValidationError(f"{label} must map userfield names to non-empty text.")
+            raise GrocyValidationError(
+                f"{label} must map non-blank userfield names to non-empty text."
+            )
 
     products = await client.get_objects("products")
     result = []
