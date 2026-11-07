@@ -125,3 +125,27 @@ async def test_usage_stats_keeps_recent_bookings_from_a_server_ahead_of_utc(clie
         stats = await stock_usage_stats_data(client, "Milk", days=7, now=NOW)
     assert stats["consumes"]["total_amount"] == 2
     assert stats["days_since_last_movement"] == 0
+
+
+async def test_usage_stats_mixed_priced_and_unpriced_purchases_are_labelled(client):
+    client.get_objects.return_value = [
+        _row("2026-10-01", "purchase", 2, price=10),
+        _row("2026-10-08", "purchase", 3),  # no price recorded
+        _row("2026-10-15", "purchase", 1, price=20),
+    ]
+    with patch("grocy_mcp.core.stock_usage.resolve_product", return_value=7):
+        stats = await stock_usage_stats_data(client, "Milk", days=90, now=NOW)
+    purchases = stats["purchases"]
+    assert purchases["count"] == 3 and purchases["total_amount"] == 6
+    assert purchases["total_spent"] == 40  # 2 x 10 + 1 x 20: the priced purchases only
+    assert purchases["average_unit_price"] == pytest.approx(40 / 3, abs=1e-4)
+    assert purchases["unpriced_purchases"] == 1
+    assert purchases["total_spent_is_complete"] is False
+
+
+async def test_usage_stats_fully_priced_purchases_are_complete(client):
+    client.get_objects.return_value = [_row("2026-10-01", "purchase", 2, price=10)]
+    with patch("grocy_mcp.core.stock_usage.resolve_product", return_value=7):
+        stats = await stock_usage_stats_data(client, "Milk", days=90, now=NOW)
+    assert stats["purchases"]["unpriced_purchases"] == 0
+    assert stats["purchases"]["total_spent_is_complete"] is True
