@@ -175,11 +175,43 @@ async def stock_add(
     return f"Added {amount} of '{product}' to stock{suffix}."
 
 
-async def stock_consume(client: GrocyClient, product: str, amount: float, **kwargs) -> str:
-    """Consume stock for a product."""
+async def stock_consume(
+    client: GrocyClient,
+    product: str,
+    amount: float,
+    from_location: str | None = None,
+    spoiled: bool = False,
+    **kwargs,
+) -> str:
+    """Consume stock for a product, optionally from one location and/or as spoiled.
+
+    With ``from_location`` the stock is taken from that location only. If it holds less than
+    ``amount``, nothing is consumed and the error lists where the stock is.
+    """
     product_id = await resolve_product(client, product)
-    await client.consume_stock(product_id, amount, **kwargs)
-    return f"Consumed {amount} of '{product}' from stock."
+    options = dict(kwargs)
+    where = ""
+    if from_location is not None:
+        location_id = await resolve_location(client, from_location)
+        held = {}
+        for row in await client.get_stock_locations(product_id):
+            row_amount = tidy_amount(row.get("amount"))
+            if row_amount:
+                held[row.get("location_id")] = (row.get("location_name", "?"), row_amount)
+        have = held.get(location_id, (from_location, 0.0))[1]
+        if have < amount:
+            elsewhere = ", ".join(f"{n} {format_amount(a)}" for n, a in held.values()) or "none"
+            raise GrocyValidationError(
+                f"Cannot consume {format_amount(amount)} of '{product}' from '{from_location}': "
+                f"it holds {format_amount(have)}. Stock is at: {elsewhere}."
+            )
+        options["location_id"] = location_id
+        where = f" from '{from_location}'"
+    if spoiled:
+        options["spoiled"] = True
+    await client.consume_stock(product_id, amount, **options)
+    kind = "Marked as spoiled" if spoiled else "Consumed"
+    return f"{kind} {amount} of '{product}'{where}."
 
 
 async def stock_transfer(

@@ -738,3 +738,61 @@ async def test_stock_levels_location_filter_adds_amount_in_location(mock_client)
     assert [(r["name"], r["amount"], r["amount_in_location"]) for r in rows] == [
         ("Minced beef", 4.0, 3.0)
     ]
+
+
+async def test_stock_consume_from_location_passes_location_id(mock_client):
+    mock_client.get_stock_locations.return_value = [
+        {"location_id": 4, "location_name": "Freezer", "amount": 2},
+        {"location_id": 2, "location_name": "Fridge", "amount": 1},
+    ]
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+        patch("grocy_mcp.core.stock.resolve_location", return_value=4),
+    ):
+        result = await stock_consume(mock_client, "Beef", 2.0, from_location="Freezer")
+    mock_client.consume_stock.assert_called_once_with(1, 2.0, location_id=4)
+    assert "from 'Freezer'" in result
+
+
+async def test_stock_consume_from_location_with_too_little_lists_where_stock_is(mock_client):
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    mock_client.get_stock_locations.return_value = [
+        {"location_id": 4, "location_name": "Freezer", "amount": 1},
+        {"location_id": 2, "location_name": "Fridge", "amount": 3},
+    ]
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+        patch("grocy_mcp.core.stock.resolve_location", return_value=4),
+        pytest.raises(GrocyValidationError, match=r"holds 1\. Stock is at: Freezer 1, Fridge 3"),
+    ):
+        await stock_consume(mock_client, "Beef", 2.0, from_location="Freezer")
+    mock_client.consume_stock.assert_not_called()
+
+
+async def test_stock_consume_from_location_without_stock_there(mock_client):
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    mock_client.get_stock_locations.return_value = [
+        {"location_id": 2, "location_name": "Fridge", "amount": 3}
+    ]
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+        patch("grocy_mcp.core.stock.resolve_location", return_value=4),
+        pytest.raises(GrocyValidationError, match=r"holds 0\. Stock is at: Fridge 3"),
+    ):
+        await stock_consume(mock_client, "Beef", 1.0, from_location="Freezer")
+
+
+async def test_stock_consume_spoiled_flag(mock_client):
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await stock_consume(mock_client, "Milk", 1.0, spoiled=True)
+    mock_client.consume_stock.assert_called_once_with(1, 1.0, spoiled=True)
+    assert "spoiled" in result
+
+
+async def test_stock_consume_default_behaviour_unchanged(mock_client):
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        await stock_consume(mock_client, "Milk", 1.0)
+    mock_client.consume_stock.assert_called_once_with(1, 1.0)
+    mock_client.get_stock_locations.assert_not_called()
