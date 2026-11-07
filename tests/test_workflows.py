@@ -462,3 +462,70 @@ async def test_workflow_stock_apply_complete_inventory_is_ok():
         )
     assert result["results"][0]["ok"] is True and "partial" not in result["results"][0]
     assert result["applied_count"] == 1
+
+
+async def test_workflow_stock_apply_unreachable_opened_amount_without_a_write_is_not_partial():
+    client = AsyncMock()
+    # the total already matches, so nothing is written; two units are already open
+    client.get_stock_product.return_value = {"stock_amount": 2, "stock_amount_opened": 2}
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await workflow_stock_apply_data(
+            client,
+            [{"action": "inventory", "product": "Milk", "new_amount": 2, "opened_amount": 1}],
+        )
+    client.inventory_stock.assert_not_called()
+    entry = result["results"][0]
+    assert entry["ok"] is False and "partial" not in entry
+    assert "cannot un-open" in entry["error"]
+
+
+async def test_workflow_stock_apply_error_after_a_write_keeps_the_confirmed_change():
+    from grocy_mcp.exceptions import GrocyServerError
+
+    client = AsyncMock()
+    client.get_stock_product.side_effect = [
+        {"stock_amount": 3, "stock_amount_opened": 0},
+        GrocyServerError("Server error (500): down"),  # the read after the inventory fails
+    ]
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await workflow_stock_apply_data(
+            client, [{"action": "inventory", "product": "Milk", "new_amount": 2}]
+        )
+    client.inventory_stock.assert_awaited_once()
+    entry = result["results"][0]
+    assert entry["ok"] is False and entry["partial"] is True
+    assert "stock set to 2" in entry["error"] and "partly applied" in entry["error"]
+    assert result["applied_count"] == 0 and result["failed_count"] == 1
+
+
+async def test_workflow_stock_apply_error_before_any_write_is_an_ordinary_failure():
+    from grocy_mcp.exceptions import GrocyServerError
+
+    client = AsyncMock()
+    client.get_stock_product.side_effect = GrocyServerError("Server error (500): down")
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await workflow_stock_apply_data(
+            client, [{"action": "inventory", "product": "Milk", "new_amount": 2}]
+        )
+    client.inventory_stock.assert_not_called()
+    entry = result["results"][0]
+    assert entry["ok"] is False and "partial" not in entry
+    assert "down" in entry["error"]
+
+
+async def test_workflow_stock_apply_error_after_opening_reports_what_was_opened():
+    from grocy_mcp.exceptions import GrocyServerError
+
+    client = AsyncMock()
+    client.get_stock_product.side_effect = [
+        {"stock_amount": 2, "stock_amount_opened": 0},
+        {"stock_amount": 2, "stock_amount_opened": 0},
+        GrocyServerError("Server error (500): down"),  # re-read after opening fails
+    ]
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await workflow_stock_apply_data(
+            client,
+            [{"action": "inventory", "product": "Milk", "new_amount": 2, "opened_amount": 1}],
+        )
+    entry = result["results"][0]
+    assert entry["partial"] is True and "1 opened" in entry["error"]
