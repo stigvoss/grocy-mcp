@@ -128,3 +128,62 @@ async def test_shopping_list_set_note(mock_client):
     mock_client.update_shopping_list_item.assert_called_once_with(5, {"note": "organic"})
     assert "5" in result
     assert "'organic'" in result
+
+
+async def test_shopping_list_add_note_only_line(mock_client):
+    mock_client.add_shopping_list_item.return_value = 11
+    result = await shopping_list_add(mock_client, note="  Spinat 300 g (Tue) ")
+    mock_client.add_shopping_list_item.assert_called_once_with(None, 1.0, 1, "Spinat 300 g (Tue)")
+    assert "item ID 11" in result and "Spinat 300 g (Tue)" in result
+
+
+async def test_shopping_list_add_requires_product_or_note(mock_client):
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    for kwargs in ({}, {"note": "   "}):
+        with pytest.raises(GrocyValidationError, match="product, or a note"):
+            await shopping_list_add(mock_client, **kwargs)
+    mock_client.add_shopping_list_item.assert_not_called()
+
+
+async def test_shopping_list_add_skips_identical_note_ignoring_case_and_spacing(mock_client):
+    mock_client.get_shopping_list.return_value = [
+        {"id": 8, "product_id": None, "amount": 1, "note": "Spinat 300 g (Tue)"},
+        {"id": 2, "product_id": 2, "amount": 1, "note": "spinat 300 g (tue)"},
+    ]
+    result = await shopping_list_add(mock_client, note="spinat  300 G (tue)", skip_if_present=True)
+    mock_client.add_shopping_list_item.assert_not_called()
+    assert "Skipped" in result and "item ID 8" in result
+
+
+async def test_shopping_list_add_skip_if_present_adds_when_not_listed(mock_client):
+    mock_client.add_shopping_list_item.return_value = 12
+    mock_client.get_shopping_list.return_value = []
+    result = await shopping_list_add(mock_client, note="Basilikum", skip_if_present=True)
+    mock_client.add_shopping_list_item.assert_called_once()
+    assert "item ID 12" in result
+
+
+async def test_shopping_list_add_skips_product_already_on_list(mock_client):
+    mock_client.get_shopping_list.return_value = [
+        {"id": 5, "product_id": 1, "amount": 2, "note": None}
+    ]
+    with patch("grocy_mcp.core.shopping.resolve_product", return_value=1):
+        result = await shopping_list_add(mock_client, "Milk", skip_if_present=True)
+    mock_client.add_shopping_list_item.assert_not_called()
+    assert "already on the list (item ID 5, amount 2)" in result
+
+
+async def test_shopping_list_add_without_skip_flag_never_checks_the_list(mock_client):
+    with patch("grocy_mcp.core.shopping.resolve_product", return_value=1):
+        await shopping_list_add(mock_client, "Milk")
+    mock_client.get_shopping_list.assert_not_called()
+
+
+async def test_shopping_list_view_shows_note_only_lines(mock_client):
+    mock_client.get_shopping_list.return_value = [
+        {"id": 8, "product_id": None, "amount": 1, "note": "Spinat 300 g (Tue)"}
+    ]
+    result = await shopping_list_view(mock_client)
+    assert "[8] Spinat 300 g (Tue) — note" in result
+    assert "Product None" not in result

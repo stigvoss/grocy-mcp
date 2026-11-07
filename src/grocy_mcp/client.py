@@ -175,9 +175,15 @@ class GrocyClient:
         return [i for i in items if i.get("shopping_list_id") == list_id]
 
     async def add_shopping_list_item(
-        self, product_id: int, amount: float = 1, shopping_list_id: int = 1, note: str | None = None
+        self,
+        product_id: int | None,
+        amount: float = 1,
+        shopping_list_id: int = 1,
+        note: str | None = None,
     ) -> int:
-        data = {"product_id": product_id, "amount": amount, "shopping_list_id": shopping_list_id}
+        data: dict[str, Any] = {"amount": amount, "shopping_list_id": shopping_list_id}
+        if product_id is not None:
+            data["product_id"] = product_id
         if note:
             data["note"] = note
         return await self.create_object("shopping_list", data)
