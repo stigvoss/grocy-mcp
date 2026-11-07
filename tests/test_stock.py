@@ -605,7 +605,7 @@ def test_stock_inventory_locks_are_not_retained_after_use():
 
     asyncio.run(both())
     gc.collect()
-    assert all(len(locks) == 0 for locks in stock_module._inventory_locks.values())
+    assert all(len(locks) == 0 for locks in stock_module._product_locks.values())
 
 
 async def test_stock_overview_rounds_and_hides_float_noise_rows(mock_client):
@@ -801,6 +801,7 @@ async def test_stock_consume_default_behaviour_unchanged(mock_client):
 def _entry(**over):
     entry = {
         "id": 24,
+        "product_id": 1,
         "amount": 2,
         "best_before_date": "2026-11-07",
         "purchased_date": "2026-11-07",
@@ -1065,3 +1066,57 @@ async def test_entries_and_edit_reject_unknown_numeric_locations(mock_client):
     with pytest.raises(GrocyValidationError, match=r"Unknown location '999'"):
         await stock_entry_edit(mock_client, 24, location="999")
     mock_client.update_stock_entry.assert_not_called()
+
+
+class _FakeProductClient:
+    """Stateful stand-in with one entry; a consume lowers it, an edit PUT replaces fields."""
+
+    def __init__(self, amount=2):
+        self.entry = _entry(amount=amount, price=None)
+
+    async def get_stock_entry(self, entry_id):
+        await asyncio.sleep(0)
+        return dict(self.entry)
+
+    async def update_stock_entry(self, entry_id, payload):
+        await asyncio.sleep(0)
+        self.entry = {**self.entry, **payload}
+
+    async def get_stock_locations(self, product_id):
+        await asyncio.sleep(0)
+        return [{"location_id": 2, "location_name": "Fridge", "amount": self.entry["amount"]}]
+
+    async def consume_stock(self, product_id, amount, **kwargs):
+        await asyncio.sleep(0)
+        self.entry["amount"] -= amount
+
+
+async def test_consume_overlapping_a_price_only_edit_is_not_undone():
+    from grocy_mcp.core.stock import stock_entry_edit
+
+    client = _FakeProductClient(amount=2)
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+        patch("grocy_mcp.core.stock.resolve_location", return_value=2),
+    ):
+        await asyncio.gather(
+            stock_entry_edit(client, 24, price=9.5),
+            stock_consume(client, "Beef", 1.0, from_location="Fridge"),
+        )
+    assert client.entry["amount"] == 1  # the consumed unit stays consumed
+    assert client.entry["price"] == 9.5
+
+
+async def test_edit_started_first_still_sees_the_consume_that_ran_before_its_write():
+    from grocy_mcp.core.stock import stock_entry_edit
+
+    client = _FakeProductClient(amount=2)
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+        patch("grocy_mcp.core.stock.resolve_location", return_value=2),
+    ):
+        await asyncio.gather(
+            stock_consume(client, "Beef", 1.0, from_location="Fridge"),
+            stock_entry_edit(client, 24, price=9.5),
+        )
+    assert client.entry["amount"] == 1 and client.entry["price"] == 9.5
