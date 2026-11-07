@@ -303,3 +303,25 @@ async def test_stock_add_rejects_bad_price_and_date(mock_client):
         with pytest.raises(GrocyValidationError, match="YYYY-MM-DD"):
             await stock_add(mock_client, "Beef", 1.0, best_before_date="31/01/2027")
     mock_client.add_stock.assert_not_called()
+
+
+@pytest.mark.parametrize("price", [float("nan"), float("inf"), -0.5])
+async def test_stock_add_rejects_non_finite_or_negative_price(mock_client, price):
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1) as resolve,
+        pytest.raises(GrocyValidationError, match="price"),
+    ):
+        await stock_add(mock_client, "Beef", 1.0, price=price)
+    resolve.assert_not_called()
+    mock_client.add_stock.assert_not_called()
+
+
+@pytest.mark.parametrize("value", ["20270131", "2027-W04-7", "2027-1-31"])
+async def test_stock_add_rejects_non_strict_dates(mock_client, value):
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    with pytest.raises(GrocyValidationError, match="YYYY-MM-DD"):
+        await stock_add(mock_client, "Beef", 1.0, best_before_date=value)
+    mock_client.add_stock.assert_not_called()

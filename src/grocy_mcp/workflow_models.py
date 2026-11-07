@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+from grocy_mcp.core.utils import is_iso_date
 
 
 def _normalize_optional_text(value: str | None) -> str | None:
@@ -70,7 +71,7 @@ class WorkflowApplyItem(BaseModel):
     product_id: int
     amount: float
     note: str | None = None
-    price: float | None = None
+    price: float | None = Field(default=None, allow_inf_nan=False)
     best_before_date: str | None = None
     location_id: int | None = None
 
@@ -99,11 +100,8 @@ class WorkflowApplyItem(BaseModel):
     @classmethod
     def validate_best_before_date(cls, value: str | None) -> str | None:
         value = _normalize_optional_text(value)
-        if value is not None:
-            try:
-                date.fromisoformat(value)
-            except ValueError as e:
-                raise ValueError("best_before_date must be formatted as YYYY-MM-DD") from e
+        if value is not None and not is_iso_date(value):
+            raise ValueError("best_before_date must be formatted as YYYY-MM-DD")
         return value
 
 

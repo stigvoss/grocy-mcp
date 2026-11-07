@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import date
+import math
 
 from grocy_mcp.client import GrocyClient
 from grocy_mcp.core.products import is_truthy_value
 from grocy_mcp.core.resolve import resolve_location, resolve_product
+from grocy_mcp.core.utils import is_iso_date
 from grocy_mcp.exceptions import GrocyValidationError
 
 
@@ -112,13 +113,10 @@ async def stock_add(
         best_before_date: Best-before date as YYYY-MM-DD.
         location_id: Location to add the stock to, when not the product's default.
     """
-    if price is not None and price < 0:
-        raise GrocyValidationError("price must not be negative.")
-    if best_before_date is not None:
-        try:
-            date.fromisoformat(best_before_date)
-        except ValueError as e:
-            raise GrocyValidationError("best_before_date must be formatted as YYYY-MM-DD.") from e
+    if price is not None and not (math.isfinite(price) and price >= 0):
+        raise GrocyValidationError("price must be a finite number that is not negative.")
+    if best_before_date is not None and not is_iso_date(best_before_date):
+        raise GrocyValidationError("best_before_date must be formatted as YYYY-MM-DD.")
     options = {
         "price": price,
         "best_before_date": best_before_date,

@@ -194,3 +194,33 @@ async def test_workflow_stock_intake_apply_rejects_negative_price_and_bad_date()
             client, [{"product_id": 1, "amount": 1, "best_before_date": "tomorrow"}]
         )
     client.add_stock.assert_not_called()
+
+
+@pytest.mark.parametrize("value", ["20270131", "2027-W04-7"])
+async def test_workflow_stock_intake_apply_rejects_non_strict_dates(value):
+    client = AsyncMock()
+    with pytest.raises(Exception, match="YYYY-MM-DD"):
+        await workflow_stock_intake_apply_data(
+            client,
+            [
+                {"product_id": 1, "amount": 1},
+                {"product_id": 2, "amount": 1, "best_before_date": value},
+            ],
+        )
+    client.add_stock.assert_not_called()
+
+
+async def test_workflow_stock_intake_apply_rejects_non_finite_price_before_any_write():
+    client = AsyncMock()
+    for bad in ('[{"product_id":1,"amount":1},{"product_id":2,"amount":1,"price":1e400}]',):
+        import json
+
+        items = json.loads(bad)
+        with pytest.raises(Exception, match="price"):
+            await workflow_stock_intake_apply_data(client, items)
+    with pytest.raises(Exception, match="price"):
+        await workflow_stock_intake_apply_data(
+            client,
+            [{"product_id": 1, "amount": 1}, {"product_id": 2, "amount": 1, "price": float("nan")}],
+        )
+    client.add_stock.assert_not_called()
