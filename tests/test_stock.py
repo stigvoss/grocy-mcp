@@ -901,3 +901,31 @@ async def test_stock_entries_lists_ids_and_location_names(mock_client):
         (25, "Freezer", True),
     ]
     assert [r["entry_id"] for r in freezer] == [25]
+
+
+async def test_stock_search_matches_userfields_when_asked(mock_client):
+    async def get_objects(entity, query=None):
+        return {
+            "products": [
+                {
+                    "id": 1,
+                    "name": "Minced beef",
+                    "userfields": {
+                        "bilkatogo": "https://x/search?query=hakket%20oksek%C3%B8d",
+                        "ai_notes": "",
+                    },
+                },
+                {"id": 2, "name": "Milk", "userfields": {"ai_notes": "mælk"}},
+            ],
+            "product_barcodes": [],
+        }[entity]
+
+    mock_client.get_objects.side_effect = get_objects
+    assert "No products found" in await stock_search(mock_client, "hakket")
+    result = await stock_search(mock_client, "hakket", include_userfields=True)
+    assert "[1] Minced beef (userfield: bilkatogo)" in result
+    assert "Milk" not in result
+    assert "[1] Minced beef" in await stock_search(mock_client, "oksekød", include_userfields=True)
+    # name matches are not tagged and are not duplicated
+    both = await stock_search(mock_client, "minced", include_userfields=True)
+    assert both.count("Minced beef") == 1 and "userfield" not in both

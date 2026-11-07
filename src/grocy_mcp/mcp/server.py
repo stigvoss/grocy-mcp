@@ -192,7 +192,10 @@ def create_mcp_server() -> FastMCP:
 
     @mcp.tool()
     async def products_list_tool(
-        fields: list[str] | None = None, userfields_set: list[str] | None = None
+        fields: list[str] | None = None,
+        userfields_set: list[str] | None = None,
+        userfields_match: dict[str, str] | None = None,
+        userfields_contains: dict[str, str] | None = None,
     ) -> list[dict]:
         """List all products as full JSON including their userfields, in one request.
 
@@ -204,9 +207,17 @@ def create_mcp_server() -> FastMCP:
                     All keys are returned when omitted.
             userfields_set: Optional userfield names that must be non-empty, e.g.
                             ["bilkatogo_ids"] returns only products that have that value.
+            userfields_match: Optional {userfield: value}; the value must equal one of the
+                              comma-separated tokens of the userfield (whitespace trimmed,
+                              case-insensitive). {"bilkatogo_ids": "19753"} finds the product
+                              with "19753,41377" or "19856, 19753" but not "119753".
+            userfields_contains: Optional {userfield: text}; case-insensitive substring match
+                                 (URL-encoded values are decoded), e.g. {"ai_notes": "hakket"}.
         """
         async with _get_client() as client:
-            return await products_list_data(client, fields, userfields_set)
+            return await products_list_data(
+                client, fields, userfields_set, userfields_match, userfields_contains
+            )
 
     @mcp.tool()
     async def stock_entries_tool(product: str, location: str | None = None) -> list[dict]:
@@ -407,18 +418,24 @@ def create_mcp_server() -> FastMCP:
             return await stock_open(client, product, amount)
 
     @mcp.tool()
-    async def stock_search_tool(query: str) -> str:
+    async def stock_search_tool(query: str, include_userfields: bool = False) -> str:
         """Search for products by name substring or barcode.
 
         Returns matching product names and IDs. Use this when you are not sure
         of the exact product name. For a direct barcode lookup with stock details,
         use stock_barcode_lookup_tool instead.
 
+        Product names are in English; household-language terms (e.g. Danish "hakket") live in
+        userfields such as ai_notes and the store link. Set include_userfields to match the
+        query against those too (case-insensitive, URL-encoded text such as %C3%B8 is decoded);
+        matching products say which userfield matched.
+
         Args:
             query: Search string to match against product names and barcodes.
+            include_userfields: Also match the query against userfield text.
         """
         async with _get_client() as client:
-            return await stock_search(client, query)
+            return await stock_search(client, query, include_userfields)
 
     @mcp.tool()
     async def stock_barcode_lookup_tool(barcode: str) -> str:
