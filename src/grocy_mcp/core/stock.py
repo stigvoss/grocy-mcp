@@ -154,11 +154,37 @@ async def stock_consume(client: GrocyClient, product: str, amount: float, **kwar
     return f"Consumed {amount} of '{product}' from stock."
 
 
-async def stock_transfer(client: GrocyClient, product: str, amount: float, to_location: str) -> str:
-    """Transfer stock to a different location."""
+async def stock_transfer(
+    client: GrocyClient,
+    product: str,
+    amount: float,
+    to_location: str,
+    from_location: str | None = None,
+) -> str:
+    """Transfer stock to a different location.
+
+    Grocy needs the source location. When ``from_location`` is omitted it is taken from the
+    single location that holds stock of the product; if stock is spread over several locations
+    (or there is none) an error asks for ``from_location``.
+    """
     product_id = await resolve_product(client, product)
-    location_id = await resolve_location(client, to_location)
-    await client.transfer_stock(product_id, amount, location_id)
+    to_location_id = await resolve_location(client, to_location)
+    if from_location is not None:
+        from_location_id = await resolve_location(client, from_location)
+    else:
+        locations = [
+            loc for loc in await client.get_stock_locations(product_id) if loc.get("amount", 0) > 0
+        ]
+        if not locations:
+            raise GrocyValidationError(f"'{product}' has no stock to transfer.")
+        if len(locations) > 1:
+            where = ", ".join(f"{loc['location_name']} ({loc['amount']:g})" for loc in locations)
+            raise GrocyValidationError(
+                f"'{product}' has stock in several locations: {where}. "
+                "Pass from_location to choose the source."
+            )
+        from_location_id = locations[0]["location_id"]
+    await client.transfer_stock(product_id, amount, to_location_id, from_location_id)
     return f"Transferred {amount} of '{product}' to location '{to_location}'."
 
 

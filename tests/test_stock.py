@@ -83,12 +83,15 @@ async def test_stock_product_info(mock_client):
 
 async def test_stock_transfer(mock_client):
     mock_client.transfer_stock.return_value = [{"id": 10}]
+    mock_client.get_stock_locations.return_value = [
+        {"location_id": 5, "location_name": "Pantry", "amount": 3}
+    ]
     with (
         patch("grocy_mcp.core.stock.resolve_product", return_value=1),
         patch("grocy_mcp.core.stock.resolve_location", return_value=2),
     ):
         result = await stock_transfer(mock_client, "Milk", 1.0, "Fridge")
-        mock_client.transfer_stock.assert_called_once_with(1, 1.0, 2)
+        mock_client.transfer_stock.assert_called_once_with(1, 1.0, 2, 5)
         assert result
 
 
@@ -155,6 +158,9 @@ async def test_stock_consume_quotes_name(mock_client):
 
 async def test_stock_transfer_quotes_names(mock_client):
     mock_client.transfer_stock.return_value = [{"id": 10}]
+    mock_client.get_stock_locations.return_value = [
+        {"location_id": 5, "location_name": "Pantry", "amount": 3}
+    ]
     with (
         patch("grocy_mcp.core.stock.resolve_product", return_value=1),
         patch("grocy_mcp.core.stock.resolve_location", return_value=2),
@@ -388,3 +394,42 @@ async def test_stock_add_rejects_bad_purchased_date(mock_client):
     with pytest.raises(GrocyValidationError, match="purchased_date"):
         await stock_add(mock_client, "Beef", 1.0, purchased_date="20261107")
     mock_client.add_stock.assert_not_called()
+
+
+async def test_stock_transfer_uses_explicit_from_location(mock_client):
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+        patch("grocy_mcp.core.stock.resolve_location", side_effect=[2, 7]),
+    ):
+        await stock_transfer(mock_client, "Milk", 1.0, "Fridge", from_location="Pantry")
+    mock_client.get_stock_locations.assert_not_called()
+    mock_client.transfer_stock.assert_called_once_with(1, 1.0, 2, 7)
+
+
+async def test_stock_transfer_ambiguous_source_asks_for_from_location(mock_client):
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    mock_client.get_stock_locations.return_value = [
+        {"location_id": 5, "location_name": "Pantry", "amount": 3},
+        {"location_id": 6, "location_name": "Freezer", "amount": 1},
+        {"location_id": 7, "location_name": "Empty", "amount": 0},
+    ]
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+        patch("grocy_mcp.core.stock.resolve_location", return_value=2),
+        pytest.raises(GrocyValidationError, match=r"Pantry \(3\), Freezer \(1\).*from_location"),
+    ):
+        await stock_transfer(mock_client, "Milk", 1.0, "Fridge")
+    mock_client.transfer_stock.assert_not_called()
+
+
+async def test_stock_transfer_without_stock_is_a_clear_error(mock_client):
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    mock_client.get_stock_locations.return_value = []
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+        patch("grocy_mcp.core.stock.resolve_location", return_value=2),
+        pytest.raises(GrocyValidationError, match="no stock to transfer"),
+    ):
+        await stock_transfer(mock_client, "Milk", 1.0, "Fridge")

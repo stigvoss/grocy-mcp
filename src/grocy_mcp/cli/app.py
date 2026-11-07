@@ -439,12 +439,15 @@ def cmd_stock_transfer(
     product: str = typer.Argument(..., help="Product name or ID."),
     amount: float = typer.Argument(..., help="Quantity to transfer."),
     to_location: str = typer.Argument(..., help="Destination location name or ID."),
+    from_location: str | None = typer.Option(
+        None, "--from-location", help="Source location name or ID (default: where stock is)."
+    ),
 ) -> None:
     """Transfer stock to a different location."""
 
     async def _inner():
         async with _client() as client:
-            return await stock_transfer(client, product, amount, to_location)
+            return await stock_transfer(client, product, amount, to_location, from_location)
 
     _exec(_inner())
 
