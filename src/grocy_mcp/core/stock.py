@@ -301,6 +301,8 @@ async def stock_inventory_outcome(
     un-open units. ``ok`` is False (and ``partial`` True, since the total was still adjusted)
     when the requested ``opened_amount`` could not be reached.
     """
+    if not (math.isfinite(new_amount) and new_amount >= 0):
+        raise GrocyValidationError("new_amount must be a finite number that is not negative.")
     if opened_amount is not None and not (
         math.isfinite(opened_amount) and 0 <= opened_amount <= new_amount
     ):
