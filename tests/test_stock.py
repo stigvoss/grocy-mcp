@@ -817,6 +817,7 @@ async def test_stock_entry_edit_sends_full_entry_with_changes(mock_client):
     from grocy_mcp.core.stock import stock_entry_edit
 
     mock_client.get_stock_entry.return_value = _entry(shopping_location_id=2, note="from market")
+    mock_client.get_objects.return_value = [{"id": 4, "name": "Freezer"}]
     with patch("grocy_mcp.core.stock.resolve_location", return_value=4):
         result = await stock_entry_edit(
             mock_client, 24, price=15.5, best_before_date="2027-01-31", location="Freezer"
@@ -1009,9 +1010,11 @@ async def test_entries_and_edit_reject_unknown_numeric_locations(mock_client):
 
     mock_client.get_objects.side_effect = get_objects
     mock_client.get_stock_entry.return_value = _entry()
-    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
-        with pytest.raises(GrocyValidationError, match=r"Unknown location '999'.*Fridge \(2\)"):
-            await stock_entries_data(mock_client, "Beef", location="999")
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+        pytest.raises(GrocyValidationError, match=r"Unknown location '999'.*Fridge \(2\)"),
+    ):
+        await stock_entries_data(mock_client, "Beef", location="999")
     with pytest.raises(GrocyValidationError, match=r"Unknown location '999'"):
         await stock_entry_edit(mock_client, 24, location="999")
     mock_client.update_stock_entry.assert_not_called()
