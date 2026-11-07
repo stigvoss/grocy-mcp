@@ -481,3 +481,105 @@ async def stock_barcode_lookup(client: GrocyClient, barcode: str) -> str:
     name = product.get("name", f"Barcode {barcode}")
     amount = info.get("stock_amount", 0)
     return f"Barcode {barcode}: {name} — {amount} in stock."
+
+
+async def stock_entries_data(
+    client: GrocyClient, product: str, location: str | None = None
+) -> list[dict]:
+    """Return a product's individual stock entries, with the entry IDs the edit tool needs."""
+    product_id = await resolve_product(client, product)
+    location_id = await resolve_location(client, location) if location is not None else None
+    names = {loc["id"]: loc.get("name") for loc in await client.get_objects("locations")}
+    result = []
+    for entry in await client.get_stock_entries(product_id):
+        if location_id is not None and entry.get("location_id") != location_id:
+            continue
+        result.append(
+            {
+                "entry_id": entry.get("id"),
+                "amount": tidy_amount(entry.get("amount")),
+                "opened": bool(int(entry.get("open") or 0)),
+                "best_before_date": entry.get("best_before_date"),
+                "purchased_date": entry.get("purchased_date"),
+                "price": entry.get("price"),
+                "location": names.get(entry.get("location_id")),
+                "shopping_location_id": entry.get("shopping_location_id"),
+            }
+        )
+    return result
+
+
+async def stock_entry_edit(
+    client: GrocyClient,
+    entry_id: int,
+    amount: float | None = None,
+    best_before_date: str | None = None,
+    price: float | None = None,
+    purchased_date: str | None = None,
+    location: str | None = None,
+    open: bool | None = None,
+) -> str:
+    """Correct one stock entry (this rewrites history; confirm with the user first).
+
+    Only the fields given are changed. Grocy requires the full entry, so the current values are
+    read first and sent back with the changes applied.
+    """
+    if (
+        all(v is None for v in (amount, best_before_date, price, purchased_date, location, open))
+        or entry_id is None
+    ):
+        raise GrocyValidationError("Give at least one field to change.")
+    if amount is not None and not (math.isfinite(amount) and amount > 0):
+        raise GrocyValidationError(
+            "amount must be greater than 0 (use stock_consume_tool to remove stock)."
+        )
+    if price is not None and not (math.isfinite(price) and price >= 0):
+        raise GrocyValidationError("price must be a finite number that is not negative.")
+    for field, value in (
+        ("best_before_date", best_before_date),
+        ("purchased_date", purchased_date),
+    ):
+        if value is not None and not is_iso_date(value):
+            raise GrocyValidationError(f"{field} must be formatted as YYYY-MM-DD.")
+
+    current = await client.get_stock_entry(entry_id)
+    changes = {
+        "amount": amount,
+        "best_before_date": best_before_date,
+        "price": price,
+        "purchased_date": purchased_date,
+        "open": None if open is None else int(open),
+    }
+    if location is not None:
+        changes["location_id"] = await resolve_location(client, location)
+    changes = {k: v for k, v in changes.items() if v is not None}
+
+    keep = ("amount", "best_before_date", "purchased_date", "price", "location_id", "open")
+    payload = {k: current[k] for k in keep if current.get(k) is not None}
+    payload["shopping_location_id"] = current.get("shopping_location_id")
+    payload.update(changes)
+    if payload.get("shopping_location_id") is None:
+        del payload["shopping_location_id"]
+    await client.update_stock_entry(entry_id, payload)
+
+    def show(value: object) -> str:
+        return format_amount(value) if isinstance(value, float) else str(value)
+
+    diffs = [
+        f"{k} {show(current.get(k))} -> {show(v)}"
+        for k, v in changes.items()
+        if current.get(k) != v
+    ]
+    detail = "; ".join(diffs) if diffs else "no change"
+    return f"Updated stock entry {entry_id}: {detail}."
+
+
+async def stock_undo(client: GrocyClient, booking_id: int) -> str:
+    """Reverse a stock booking (a stock journal entry). This rewrites history."""
+    try:
+        await client.undo_booking(booking_id)
+    except GrocyValidationError as e:
+        raise GrocyValidationError(
+            f"Could not undo booking {booking_id}: it may not exist or may already be undone ({e})."
+        ) from e
+    return f"Undid booking {booking_id}."

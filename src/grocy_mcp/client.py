@@ -118,6 +118,21 @@ class GrocyClient:
         resp = await self._request("POST", f"/stock/products/{product_id}/consume", json=data)
         return resp.json()
 
+    async def get_stock_entries(self, product_id: int) -> list[dict]:
+        resp = await self._request("GET", f"/stock/products/{product_id}/entries")
+        return resp.json()
+
+    async def get_stock_entry(self, entry_id: int) -> dict:
+        resp = await self._request("GET", f"/stock/entry/{entry_id}")
+        return resp.json()
+
+    async def update_stock_entry(self, entry_id: int, data: dict) -> Any:
+        resp = await self._request("PUT", f"/stock/entry/{entry_id}", json=data)
+        return resp.json()
+
+    async def undo_booking(self, booking_id: int) -> None:
+        await self._request("POST", f"/stock/bookings/{booking_id}/undo")
+
     async def get_stock_locations(self, product_id: int) -> list[dict]:
         resp = await self._request("GET", f"/stock/products/{product_id}/locations")
         return resp.json()

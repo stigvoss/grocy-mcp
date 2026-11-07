@@ -796,3 +796,108 @@ async def test_stock_consume_default_behaviour_unchanged(mock_client):
         await stock_consume(mock_client, "Milk", 1.0)
     mock_client.consume_stock.assert_called_once_with(1, 1.0)
     mock_client.get_stock_locations.assert_not_called()
+
+
+def _entry(**over):
+    entry = {
+        "id": 24,
+        "amount": 2,
+        "best_before_date": "2026-11-07",
+        "purchased_date": "2026-11-07",
+        "price": None,
+        "open": 0,
+        "location_id": 2,
+        "shopping_location_id": None,
+    }
+    entry.update(over)
+    return entry
+
+
+async def test_stock_entry_edit_sends_full_entry_with_changes(mock_client):
+    from grocy_mcp.core.stock import stock_entry_edit
+
+    mock_client.get_stock_entry.return_value = _entry(shopping_location_id=2)
+    with patch("grocy_mcp.core.stock.resolve_location", return_value=4):
+        result = await stock_entry_edit(
+            mock_client, 24, price=15.5, best_before_date="2027-01-31", location="Freezer"
+        )
+    mock_client.update_stock_entry.assert_called_once_with(
+        24,
+        {
+            "amount": 2,
+            "best_before_date": "2027-01-31",
+            "purchased_date": "2026-11-07",
+            "location_id": 4,
+            "open": 0,
+            "shopping_location_id": 2,
+            "price": 15.5,
+        },
+    )
+    assert "price None -> 15.5" in result
+    assert "best_before_date 2026-11-07 -> 2027-01-31" in result
+
+
+async def test_stock_entry_edit_open_flag(mock_client):
+    from grocy_mcp.core.stock import stock_entry_edit
+
+    mock_client.get_stock_entry.return_value = _entry()
+    await stock_entry_edit(mock_client, 24, open=True)
+    assert mock_client.update_stock_entry.call_args.args[1]["open"] == 1
+
+
+@pytest.mark.parametrize(
+    "kwargs, message",
+    [
+        ({}, "at least one field"),
+        ({"amount": 0}, "greater than 0"),
+        ({"amount": float("nan")}, "greater than 0"),
+        ({"price": -1}, "price"),
+        ({"price": float("inf")}, "price"),
+        ({"best_before_date": "20270131"}, "best_before_date"),
+        ({"purchased_date": "tomorrow"}, "purchased_date"),
+    ],
+)
+async def test_stock_entry_edit_validates_before_any_request(mock_client, kwargs, message):
+    from grocy_mcp.core.stock import stock_entry_edit
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    with pytest.raises(GrocyValidationError, match=message):
+        await stock_entry_edit(mock_client, 24, **kwargs)
+    mock_client.get_stock_entry.assert_not_called()
+    mock_client.update_stock_entry.assert_not_called()
+
+
+async def test_stock_undo_calls_client_and_explains_failure(mock_client):
+    from grocy_mcp.core.stock import stock_undo
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    assert "Undid booking 17" in await stock_undo(mock_client, 17)
+    mock_client.undo_booking.assert_called_once_with(17)
+
+    mock_client.undo_booking.side_effect = GrocyValidationError("Validation error: gone")
+    with pytest.raises(GrocyValidationError, match="may already be undone"):
+        await stock_undo(mock_client, 17)
+
+
+async def test_stock_entries_lists_ids_and_location_names(mock_client):
+    from grocy_mcp.core.stock import stock_entries_data
+
+    mock_client.get_stock_entries.return_value = [
+        _entry(id=24, location_id=2),
+        _entry(id=25, location_id=4, open=1, price=4.5),
+    ]
+
+    async def get_objects(entity, query=None):
+        return {"locations": [{"id": 2, "name": "Fridge"}, {"id": 4, "name": "Freezer"}]}[entity]
+
+    mock_client.get_objects.side_effect = get_objects
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        rows = await stock_entries_data(mock_client, "Beef")
+        freezer = None
+        with patch("grocy_mcp.core.stock.resolve_location", return_value=4):
+            freezer = await stock_entries_data(mock_client, "Beef", location="Freezer")
+    assert [(r["entry_id"], r["location"], r["opened"]) for r in rows] == [
+        (24, "Fridge", False),
+        (25, "Freezer", True),
+    ]
+    assert [r["entry_id"] for r in freezer] == [25]

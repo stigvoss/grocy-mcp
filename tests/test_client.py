@@ -254,3 +254,12 @@ async def test_get_stock_locations(client, mock_api):
         )
     )
     assert (await client.get_stock_locations(6))[0]["location_name"] == "Pantry"
+
+
+async def test_update_stock_entry_and_undo_booking(client, mock_api):
+    put = mock_api.put("/stock/entry/24").mock(return_value=httpx.Response(200, json=[{"id": 5}]))
+    undo = mock_api.post("/stock/bookings/17/undo").mock(return_value=httpx.Response(204))
+    await client.update_stock_entry(24, {"amount": 2, "price": 1.5})
+    await client.undo_booking(17)
+    assert json.loads(put.calls.last.request.content) == {"amount": 2, "price": 1.5}
+    assert undo.called
