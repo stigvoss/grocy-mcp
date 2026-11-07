@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 _DATETIME_FORMATS = [
     "%Y-%m-%d %H:%M:%S",
@@ -21,3 +21,11 @@ def parse_datetime(value: str | None) -> datetime | None:
         except ValueError:
             continue
     return None
+
+
+def is_iso_date(value: str) -> bool:
+    """Return True only for strict ``YYYY-MM-DD`` dates (not compact or week-date forms)."""
+    try:
+        return date.fromisoformat(value).isoformat() == value
+    except ValueError:
+        return False

@@ -214,7 +214,10 @@ async def workflow_stock_intake_apply_data(client: GrocyClient, items: list[dict
     parsed_items = _parse_model_list(items, WorkflowApplyItem, "items")
 
     for item in parsed_items:
-        await client.add_stock(item.product_id, item.amount)
+        options = item.model_dump(include={"price", "best_before_date", "location_id"})
+        await client.add_stock(
+            item.product_id, item.amount, **{k: v for k, v in options.items() if v is not None}
+        )
 
     return {
         "applied_count": len(parsed_items),
@@ -228,7 +231,10 @@ async def workflow_stock_intake_apply(client: GrocyClient, items: list[dict] | o
     lines = [f"Workflow stock intake applied for {result['applied_count']} item(s)."]
     for item in result["applied_items"]:
         note_suffix = f" ({item['note']})" if item.get("note") else ""
-        lines.append(f"  Product ID {item['product_id']}: added {item['amount']}{note_suffix}")
+        price_suffix = f" at price {item['price']}" if "price" in item else ""
+        lines.append(
+            f"  Product ID {item['product_id']}: added {item['amount']}{price_suffix}{note_suffix}"
+        )
     return "\n".join(lines)
 
 
