@@ -4,21 +4,7 @@ from __future__ import annotations
 
 from grocy_mcp.client import GrocyClient
 from grocy_mcp.core.resolve import resolve_product
-
-_AMOUNT_DECIMALS = 6
-
-
-def _tidy_amount(value: object) -> float | None:
-    """Round a journal amount to remove float noise; None when it is not a number."""
-    try:
-        return round(float(value), _AMOUNT_DECIMALS) + 0.0
-    except (TypeError, ValueError):
-        return None
-
-
-def _format_amount(value: float) -> str:
-    """Format with up to six decimals and no trailing zeros (``g`` would cut significant digits)."""
-    return f"{value:.{_AMOUNT_DECIMALS}f}".rstrip("0").rstrip(".")
+from grocy_mcp.core.utils import format_amount, tidy_amount
 
 
 async def stock_journal(client: GrocyClient, product: str | None = None) -> str:
@@ -39,7 +25,7 @@ async def stock_journal(client: GrocyClient, product: str | None = None) -> str:
             return f"No stock journal entries found for '{product}'."
 
     # Float residue (e.g. 2.2e-16 from opening or transferring) is not a real movement
-    visible = [e for e in entries if _tidy_amount(e.get("amount")) != 0.0]
+    visible = [e for e in entries if tidy_amount(e.get("amount")) != 0.0]
     hidden = len(entries) - len(visible)
     entries = visible
 
@@ -50,8 +36,8 @@ async def stock_journal(client: GrocyClient, product: str | None = None) -> str:
     lines = ["Stock journal (most recent first):"]
     for entry in entries:
         prod_name = product_map.get(entry.get("product_id"), f"Product {entry.get('product_id')}")
-        tidy = _tidy_amount(entry.get("amount"))
-        amount = _format_amount(tidy) if tidy is not None else entry.get("amount", "?")
+        tidy = tidy_amount(entry.get("amount"))
+        amount = format_amount(tidy) if tidy is not None else entry.get("amount", "?")
         txn_type = entry.get("transaction_type", "?")
         timestamp = entry.get("row_created_timestamp", "?")
         lines.append(f"  [{entry.get('id', '?')}] {prod_name} — {txn_type} {amount} — {timestamp}")

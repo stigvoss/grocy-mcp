@@ -9,7 +9,7 @@ import weakref
 from grocy_mcp.client import GrocyClient
 from grocy_mcp.core.products import is_truthy_value
 from grocy_mcp.core.resolve import resolve_location, resolve_product
-from grocy_mcp.core.utils import is_iso_date
+from grocy_mcp.core.utils import format_amount, is_iso_date, tidy_amount, zero_rows_note
 from grocy_mcp.exceptions import GrocyValidationError
 
 
@@ -19,11 +19,18 @@ async def stock_overview(client: GrocyClient) -> str:
     if not items:
         return "No stock found."
     lines = ["Current stock:"]
+    hidden = 0
     for item in items:
+        amount = tidy_amount(item.get("amount", 0))
+        if amount == 0:
+            hidden += 1
+            continue
         product = item.get("product") or {}
         name = product.get("name", f"Product {item.get('product_id')}")
-        amount = item.get("amount", 0)
-        lines.append(f"  [{item.get('product_id', '?')}] {name} — {amount}")
+        shown = format_amount(amount) if amount is not None else item.get("amount")
+        lines.append(f"  [{item.get('product_id', '?')}] {name} — {shown}")
+    if hidden:
+        lines.append(f"  {zero_rows_note(hidden)}")
     return "\n".join(lines)
 
 
@@ -86,10 +93,6 @@ def _split_amounts(info: dict) -> tuple[float, float, float]:
     return total, opened, max(total - opened, 0.0)
 
 
-def _fmt(value: float) -> str:
-    return f"{value:g}"
-
-
 async def stock_product_info(client: GrocyClient, product: str) -> str:
     """Return detailed stock information for a specific product."""
     product_id = await resolve_product(client, product)
@@ -104,9 +107,9 @@ async def stock_product_info(client: GrocyClient, product: str) -> str:
 
     return (
         f"Product: {name}\n"
-        f"  In stock: {_fmt(total)} {unit}\n"
-        f"  Unopened: {_fmt(unopened)}\n"
-        f"  Opened: {_fmt(opened)}\n"
+        f"  In stock: {format_amount(total)} {unit}\n"
+        f"  Unopened: {format_amount(unopened)}\n"
+        f"  Opened: {format_amount(opened)}\n"
         f"  Location: {location}\n"
         f"  Next best before: {best_before}"
     )
@@ -239,19 +242,19 @@ async def stock_inventory(
                 await client.open_stock(product_id, opened_amount - opened)
             except GrocyValidationError:
                 note = (
-                    f" The inventory was applied, but opening {_fmt(opened_amount - opened)} "
-                    f"more to reach {_fmt(opened_amount)} opened failed."
+                    f" The inventory was applied, but opening {format_amount(opened_amount - opened)} "
+                    f"more to reach {format_amount(opened_amount)} opened failed."
                 )
             total, opened, unopened = _split_amounts(await client.get_stock_product(product_id))
         if opened_amount is not None and opened > opened_amount:
             note += (
-                f" {_fmt(opened)} are open but {_fmt(opened_amount)} were requested; "
+                f" {format_amount(opened)} are open but {format_amount(opened_amount)} were requested; "
                 "Grocy cannot un-open units."
             )
 
     return (
         f"Inventory updated: '{product}' set to {new_amount} "
-        f"(unopened {_fmt(unopened)}, opened {_fmt(opened)}).{note}"
+        f"(unopened {format_amount(unopened)}, opened {format_amount(opened)}).{note}"
     )
 
 
@@ -268,16 +271,16 @@ async def stock_open(client: GrocyClient, product: str, amount: float = 1.0) -> 
 
     if unopened < amount:
         return (
-            f"Cannot open {_fmt(amount)} of '{name}': unopened amount is {_fmt(unopened)} "
-            f"(already opened: {_fmt(opened)}). Add stock first, or consume the opened amount."
+            f"Cannot open {format_amount(amount)} of '{name}': unopened amount is {format_amount(unopened)} "
+            f"(already opened: {format_amount(opened)}). Add stock first, or consume the opened amount."
         )
 
     try:
         await client.open_stock(product_id, amount)
     except GrocyValidationError:
         return (
-            f"Grocy refused to open {_fmt(amount)} of '{name}' "
-            f"(unopened: {_fmt(unopened)}, opened: {_fmt(opened)}). "
+            f"Grocy refused to open {format_amount(amount)} of '{name}' "
+            f"(unopened: {format_amount(unopened)}, opened: {format_amount(opened)}). "
             "Check the product's stock and 'opened' settings."
         )
     return f"Opened {amount} of '{product}'."
@@ -339,8 +342,8 @@ async def stock_levels_data(
             {
                 "product_id": product["id"],
                 "name": product.get("name"),
-                "amount": amounts.get(product["id"], 0.0),
-                "amount_aggregated": aggregated.get(product["id"], 0.0),
+                "amount": tidy_amount(amounts.get(product["id"], 0.0)),
+                "amount_aggregated": tidy_amount(aggregated.get(product["id"], 0.0)),
                 "stock_unit": units.get(product.get("qu_id_stock")),
                 "default_location": locations.get(product.get("location_id")),
                 "product_group_id": product.get("product_group_id"),
