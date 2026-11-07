@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `entity_create_tool` and `entity_update_tool` translate Grocy constraint errors (missing required
+  field, duplicate, unknown ID) into short messages instead of returning raw SQL errors
 - `stock_open_tool` returns a clear message (product, unopened and opened amounts) instead of a raw
   API error when there is not enough unopened stock
 - `entity_update_tool` rejects a `userfields` key up front and points to `userfields_set_tool`
