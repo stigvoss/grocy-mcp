@@ -129,6 +129,8 @@ from grocy_mcp.core.workflows import (
     workflow_shopping_reconcile_apply_data,
     workflow_shopping_reconcile_preview,
     workflow_shopping_reconcile_preview_data,
+    workflow_stock_apply,
+    workflow_stock_apply_data,
     workflow_stock_intake_apply,
     workflow_stock_intake_apply_data,
     workflow_stock_intake_preview,
@@ -1809,6 +1811,34 @@ def cmd_workflow_stock_intake_apply(
         async def _inner():
             async with _client() as client:
                 return await workflow_stock_intake_apply(client, parsed_items)
+
+        _exec(_inner())
+
+
+@workflow_app.command("stock-apply")
+def cmd_workflow_stock_apply(
+    actions: str = typer.Argument(
+        ...,
+        help=(
+            "JSON array of stock actions, e.g. "
+            '\'[{"action": "consume", "product": "Milk", "amount": 1}]\''
+        ),
+    ),
+) -> None:
+    """Apply a batch of consume/open/inventory/transfer actions; failures do not abort the rest."""
+    parsed_actions = _parse_json(actions, "actions")
+    if _output_json:
+
+        async def _inner():
+            async with _client() as client:
+                return await workflow_stock_apply_data(client, parsed_actions)
+
+        _exec_json(_inner())
+    else:
+
+        async def _inner():
+            async with _client() as client:
+                return await workflow_stock_apply(client, parsed_actions)
 
         _exec(_inner())
 
