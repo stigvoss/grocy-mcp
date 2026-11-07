@@ -1,5 +1,6 @@
 """Tests for the stock core module."""
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -97,6 +98,10 @@ async def test_stock_transfer(mock_client):
 
 async def test_stock_inventory(mock_client):
     mock_client.inventory_stock.return_value = [{"id": 10}]
+    mock_client.get_stock_product.side_effect = [
+        {"stock_amount": 8, "stock_amount_opened": 0},
+        {"stock_amount": 5, "stock_amount_opened": 0},
+    ]
     with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
         result = await stock_inventory(mock_client, "Milk", 5.0)
         mock_client.inventory_stock.assert_called_once_with(1, 5.0)
@@ -172,6 +177,10 @@ async def test_stock_transfer_quotes_names(mock_client):
 
 async def test_stock_inventory_quotes_name(mock_client):
     mock_client.inventory_stock.return_value = [{"id": 10}]
+    mock_client.get_stock_product.side_effect = [
+        {"stock_amount": 8, "stock_amount_opened": 0},
+        {"stock_amount": 5, "stock_amount_opened": 0},
+    ]
     with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
         result = await stock_inventory(mock_client, "Milk", 5.0)
         assert "'Milk'" in result
@@ -433,3 +442,160 @@ async def test_stock_transfer_without_stock_is_a_clear_error(mock_client):
         pytest.raises(GrocyValidationError, match="no stock to transfer"),
     ):
         await stock_transfer(mock_client, "Milk", 1.0, "Fridge")
+
+
+async def test_stock_inventory_reports_split(mock_client):
+    mock_client.get_stock_product.side_effect = [
+        {"stock_amount": 3, "stock_amount_opened": 1},
+        {"stock_amount": 2, "stock_amount_opened": 1},
+    ]
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await stock_inventory(mock_client, "Milk", 2.0)
+    assert "unopened 1, opened 1" in result
+    mock_client.open_stock.assert_not_called()
+
+
+async def test_stock_inventory_opens_missing_units_to_match_opened_amount(mock_client):
+    # Grocy dropped the opened unit first: 2 in stock, none opened
+    mock_client.get_stock_product.side_effect = [
+        {"stock_amount": 3, "stock_amount_opened": 1},
+        {"stock_amount": 2, "stock_amount_opened": 0},
+        {"stock_amount": 2, "stock_amount_opened": 1},
+    ]
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await stock_inventory(mock_client, "Milk", 2.0, opened_amount=1)
+    mock_client.open_stock.assert_called_once_with(1, 1)
+    assert "unopened 1, opened 1" in result
+
+
+async def test_stock_inventory_cannot_unopen(mock_client):
+    mock_client.get_stock_product.side_effect = [
+        {"stock_amount": 3, "stock_amount_opened": 2},
+        {"stock_amount": 2, "stock_amount_opened": 2},
+    ]
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await stock_inventory(mock_client, "Milk", 2.0, opened_amount=1)
+    mock_client.open_stock.assert_not_called()
+    assert "cannot un-open" in result
+
+
+@pytest.mark.parametrize("opened", [-1, 3, float("nan")])
+async def test_stock_inventory_rejects_bad_opened_amount_before_any_request(mock_client, opened):
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    with pytest.raises(GrocyValidationError, match="opened_amount"):
+        await stock_inventory(mock_client, "Milk", 2.0, opened_amount=opened)
+    mock_client.inventory_stock.assert_not_called()
+
+
+async def test_stock_inventory_skips_inventory_when_amount_unchanged(mock_client):
+    mock_client.get_stock_product.side_effect = [
+        {"stock_amount": 2, "stock_amount_opened": 0},
+        {"stock_amount": 2, "stock_amount_opened": 0},
+        {"stock_amount": 2, "stock_amount_opened": 1},
+    ]
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await stock_inventory(mock_client, "Milk", 2.0, opened_amount=1)
+    mock_client.inventory_stock.assert_not_called()
+    mock_client.open_stock.assert_called_once_with(1, 1)
+    assert "unopened 1, opened 1" in result
+
+
+class _FakeStockClient:
+    """Tiny stateful stand-in for Grocy: one product with a total and an opened count."""
+
+    def __init__(self, total, opened):
+        self.total, self.opened = total, opened
+        self.open_calls = []
+
+    async def get_stock_product(self, product_id):
+        await asyncio.sleep(0)
+        return {"stock_amount": self.total, "stock_amount_opened": self.opened}
+
+    async def inventory_stock(self, product_id, new_amount):
+        await asyncio.sleep(0)
+        removed = self.total - new_amount
+        self.opened = max(self.opened - removed, 0)
+        self.total = new_amount
+
+    async def open_stock(self, product_id, amount):
+        await asyncio.sleep(0)
+        self.open_calls.append(amount)
+        self.opened += amount
+
+
+async def test_stock_inventory_overlapping_calls_do_not_double_open():
+    client = _FakeStockClient(total=3, opened=0)
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        results = await asyncio.gather(
+            stock_inventory(client, "Milk", 2.0, opened_amount=1),
+            stock_inventory(client, "Milk", 2.0, opened_amount=1),
+        )
+    assert client.opened == 1
+    assert client.open_calls == [1]
+    assert all("unopened 1, opened 1" in r for r in results)
+
+
+async def test_stock_inventory_reports_actual_split_when_opening_fails(mock_client):
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    mock_client.get_stock_product.side_effect = [
+        {"stock_amount": 3, "stock_amount_opened": 1},
+        {"stock_amount": 2, "stock_amount_opened": 0},
+        {"stock_amount": 2, "stock_amount_opened": 0},
+    ]
+    mock_client.open_stock.side_effect = GrocyValidationError("Validation error: boom")
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await stock_inventory(mock_client, "Milk", 2.0, opened_amount=1)
+    assert "unopened 2, opened 0" in result
+    assert "inventory was applied" in result
+    assert "boom" not in result
+
+
+async def test_stock_inventory_rereads_split_after_opening(mock_client):
+    mock_client.get_stock_product.side_effect = [
+        {"stock_amount": 3, "stock_amount_opened": 0},
+        {"stock_amount": 2, "stock_amount_opened": 0},
+        {"stock_amount": 2, "stock_amount_opened": 2},
+    ]
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await stock_inventory(mock_client, "Milk", 2.0, opened_amount=1)
+    assert "unopened 0, opened 2" in result
+    assert "cannot un-open" in result
+
+
+def test_stock_inventory_locks_work_across_successive_event_loops():
+    def run_once():
+        client = _FakeStockClient(total=3, opened=0)
+
+        async def both():
+            with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+                return await asyncio.gather(
+                    stock_inventory(client, "Milk", 2.0, opened_amount=1),
+                    stock_inventory(client, "Milk", 2.0, opened_amount=1),
+                )
+
+        asyncio.run(both())
+        return client
+
+    assert run_once().opened == 1
+    assert run_once().opened == 1
+
+
+def test_stock_inventory_locks_are_not_retained_after_use():
+    import gc
+
+    from grocy_mcp.core import stock as stock_module
+
+    client = _FakeStockClient(total=3, opened=0)
+
+    async def both():
+        with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+            await asyncio.gather(
+                stock_inventory(client, "Milk", 2.0, opened_amount=1),
+                stock_inventory(client, "Milk", 2.0, opened_amount=1),
+            )
+
+    asyncio.run(both())
+    gc.collect()
+    assert all(len(locks) == 0 for locks in stock_module._inventory_locks.values())

@@ -274,18 +274,26 @@ def create_mcp_server() -> FastMCP:
             return await stock_transfer(client, product, amount, to_location, from_location)
 
     @mcp.tool()
-    async def stock_inventory_tool(product: str, new_amount: float) -> str:
+    async def stock_inventory_tool(
+        product: str, new_amount: float, opened_amount: float | None = None
+    ) -> str:
         """Correct the stock level for a product by setting an absolute quantity.
 
         Use this when the actual count differs from what Grocy shows — e.g. after
         a manual count. This replaces the current amount, not adds to it.
 
+        When the amount goes down Grocy removes opened units first, so pass opened_amount to
+        end up with the right split (e.g. new_amount=2, opened_amount=1 for one unopened and
+        one opened pack). The reply always shows the resulting unopened and opened amounts.
+        Grocy cannot un-open units: if more are open than opened_amount, the reply says so.
+
         Args:
             product: Product name (e.g. "Milk") or numeric product ID.
             new_amount: The corrected total stock quantity.
+            opened_amount: Optional number of units that should be opened (0 to new_amount).
         """
         async with _get_client() as client:
-            return await stock_inventory(client, product, new_amount)
+            return await stock_inventory(client, product, new_amount, opened_amount)
 
     @mcp.tool()
     async def stock_open_tool(product: str, amount: float = 1.0) -> str:

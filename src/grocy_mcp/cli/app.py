@@ -456,12 +456,15 @@ def cmd_stock_transfer(
 def cmd_stock_inventory(
     product: str = typer.Argument(..., help="Product name or ID."),
     new_amount: float = typer.Argument(..., help="New total stock quantity."),
+    opened_amount: float | None = typer.Option(
+        None, "--opened-amount", help="How many of the units should be opened."
+    ),
 ) -> None:
     """Set stock amount for a product via inventory adjustment."""
 
     async def _inner():
         async with _client() as client:
-            return await stock_inventory(client, product, new_amount)
+            return await stock_inventory(client, product, new_amount, opened_amount)
 
     _exec(_inner())
 

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
+import weakref
 
 from grocy_mcp.client import GrocyClient
 from grocy_mcp.core.products import is_truthy_value
@@ -59,6 +61,22 @@ async def stock_expiring(client: GrocyClient) -> str:
         return "No expiring, expired, or missing products found."
 
     return "\n".join(lines)
+
+
+# asyncio.Lock objects belong to one event loop, so the registry is keyed by the running loop.
+# Both levels are weak: a closed loop and idle locks are dropped, while a caller that is
+# waiting for or holding a lock keeps it alive for the duration of its ``async with``.
+_inventory_locks: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, weakref.WeakValueDictionary[int, asyncio.Lock]
+] = weakref.WeakKeyDictionary()
+
+
+def _inventory_lock(product_id: int) -> asyncio.Lock:
+    locks = _inventory_locks.setdefault(asyncio.get_running_loop(), weakref.WeakValueDictionary())
+    lock = locks.get(product_id)
+    if lock is None:
+        lock = locks[product_id] = asyncio.Lock()
+    return lock
 
 
 def _split_amounts(info: dict) -> tuple[float, float, float]:
@@ -188,11 +206,53 @@ async def stock_transfer(
     return f"Transferred {amount} of '{product}' to location '{to_location}'."
 
 
-async def stock_inventory(client: GrocyClient, product: str, new_amount: float) -> str:
-    """Set the stock amount for a product via inventory."""
+async def stock_inventory(
+    client: GrocyClient,
+    product: str,
+    new_amount: float,
+    opened_amount: float | None = None,
+) -> str:
+    """Set the stock amount for a product via inventory and report the opened/unopened split.
+
+    Grocy removes opened units first when the amount goes down. With ``opened_amount`` the
+    missing units are opened afterwards so the result matches the physical count. Grocy cannot
+    un-open units, so if more units are open than asked for, the result says so.
+    """
+    if opened_amount is not None and not (
+        math.isfinite(opened_amount) and 0 <= opened_amount <= new_amount
+    ):
+        raise GrocyValidationError("opened_amount must be between 0 and new_amount.")
+
     product_id = await resolve_product(client, product)
-    await client.inventory_stock(product_id, new_amount)
-    return f"Inventory updated: '{product}' set to {new_amount}."
+    # Serialise the read/adjust/open sequence per product, so overlapping calls in this server
+    # cannot both read the same opened count and each open the missing units.
+    async with _inventory_lock(product_id):
+        total, _, _ = _split_amounts(await client.get_stock_product(product_id))
+        if total != new_amount:
+            # Grocy rejects an inventory that equals the current amount, so skip it then
+            await client.inventory_stock(product_id, new_amount)
+        total, opened, unopened = _split_amounts(await client.get_stock_product(product_id))
+
+        note = ""
+        if opened_amount is not None and opened < opened_amount:
+            try:
+                await client.open_stock(product_id, opened_amount - opened)
+            except GrocyValidationError:
+                note = (
+                    f" The inventory was applied, but opening {_fmt(opened_amount - opened)} "
+                    f"more to reach {_fmt(opened_amount)} opened failed."
+                )
+            total, opened, unopened = _split_amounts(await client.get_stock_product(product_id))
+        if opened_amount is not None and opened > opened_amount:
+            note += (
+                f" {_fmt(opened)} are open but {_fmt(opened_amount)} were requested; "
+                "Grocy cannot un-open units."
+            )
+
+    return (
+        f"Inventory updated: '{product}' set to {new_amount} "
+        f"(unopened {_fmt(unopened)}, opened {_fmt(opened)}).{note}"
+    )
 
 
 async def stock_open(client: GrocyClient, product: str, amount: float = 1.0) -> str:

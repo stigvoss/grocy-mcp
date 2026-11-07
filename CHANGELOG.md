@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `stock_inventory_tool` (and `grocy stock inventory --opened-amount`) takes an optional
+  `opened_amount` and always reports the resulting unopened/opened split; Grocy removes opened
+  units first on a decrease, so missing opened units are opened afterwards (Grocy cannot un-open)
 - `entity_create_tool` / `entity_update_tool` / `entity_delete_tool` reject read-only views such as
   `stock` up front, pointing to the `stock_*` tools, and the entity tool descriptions list which
   entities are read-only
