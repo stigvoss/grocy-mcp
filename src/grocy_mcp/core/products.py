@@ -140,6 +140,15 @@ def _name_key(name: str) -> str:
 _MAX_MATCHED_WORDS = 16  # bitmask states grow as 2**words; longer names use greedy pairing
 
 
+def _word_ratio(x: str, y: str) -> float:
+    """Symmetric word similarity: ``SequenceMatcher`` scores a transposition differently
+    depending on argument order (``ppeper``/``pepper`` is 0.67 one way and 0.83 the other)."""
+    return max(
+        difflib.SequenceMatcher(None, x, y).ratio(),
+        difflib.SequenceMatcher(None, y, x).ratio(),
+    )
+
+
 def _words_similar(a: list[str], b: list[str]) -> bool:
     """True when both names have the same number of words and each word has a close match.
 
@@ -157,7 +166,7 @@ def _words_similar(a: list[str], b: list[str]) -> bool:
     for word in a:
         row = []
         for j, other in enumerate(b):
-            ratio = difflib.SequenceMatcher(None, word, other).ratio()
+            ratio = _word_ratio(word, other)
             if ratio >= _WORD_MIN_RATIO:
                 row.append((j, ratio))
         if not row:

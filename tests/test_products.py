@@ -436,3 +436,25 @@ async def test_blank_userfield_names_are_rejected_in_both_filters(
     with pytest.raises(GrocyValidationError, match="non-blank userfield names"):
         await products_list_data(userfield_client, **{filter_name: {key: "19753"}})
     userfield_client.get_objects.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "new_name, existing",
+    [
+        ("Organic ppeper", "Organic pepper"),
+        ("Organic pepper", "Organic ppeper"),
+        ("Tomaot sauce", "Tomato sauce"),
+        ("Tomato sauce", "Tomaot sauce"),
+    ],
+)
+def test_duplicate_detection_is_symmetric_for_transposed_letters(new_name, existing):
+    from grocy_mcp.core.products import find_near_duplicates
+
+    assert find_near_duplicates(new_name, [{"id": 1, "name": existing}])
+
+
+def test_word_similarity_is_the_same_in_both_directions():
+    from grocy_mcp.core.products import _word_ratio
+
+    assert _word_ratio("ppeper", "pepper") == _word_ratio("pepper", "ppeper")
+    assert _word_ratio("ppeper", "pepper") >= 0.83
