@@ -145,3 +145,14 @@ async def test_userfield_filters_treat_numeric_zero_as_a_value():
     assert [p["id"] for p in matched] == [1]
     contained = await products_list_data(client, userfields_contains={"code": "0"})
     assert [p["id"] for p in contained] == [1]
+
+
+@pytest.mark.parametrize("key", ["", "   "])
+@pytest.mark.parametrize("filter_name", ["userfields_match", "userfields_contains"])
+async def test_blank_userfield_names_are_rejected_in_both_filters(
+    userfield_client, filter_name, key
+):
+    userfield_client.get_objects.reset_mock()
+    with pytest.raises(GrocyValidationError, match="non-blank userfield names"):
+        await products_list_data(userfield_client, **{filter_name: {key: "19753"}})
+    userfield_client.get_objects.assert_not_called()
