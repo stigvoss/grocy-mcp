@@ -211,6 +211,9 @@ def create_mcp_server() -> FastMCP:
         price: float | None = None,
         best_before_date: str | None = None,
         location_id: int | None = None,
+        location: str | None = None,
+        purchased_date: str | None = None,
+        shopping_location_id: int | None = None,
     ) -> str:
         """Add stock for a product (e.g. after a purchase).
 
@@ -222,6 +225,10 @@ def create_mcp_server() -> FastMCP:
             best_before_date: Optional best-before date, YYYY-MM-DD.
             location_id: Optional location ID to add the stock to (e.g. the freezer), instead
                          of the product's default location.
+            location: Optional location name or numeric ID, as an alternative to location_id
+                      (do not pass both).
+            purchased_date: Optional purchase date, YYYY-MM-DD.
+            shopping_location_id: Optional store (shopping location) ID.
         """
         async with _get_client() as client:
             return await stock_add(
@@ -231,6 +238,9 @@ def create_mcp_server() -> FastMCP:
                 price=price,
                 best_before_date=best_before_date,
                 location_id=location_id,
+                location=location,
+                purchased_date=purchased_date,
+                shopping_location_id=shopping_location_id,
             )
 
     @mcp.tool()
@@ -1088,8 +1098,8 @@ def create_mcp_server() -> FastMCP:
 
         Args:
             items: JSON array of confirmed apply items, each with product_id and amount, and
-                optionally price (per stock unit), best_before_date (YYYY-MM-DD),
-                location_id and note. Example:
+                optionally price (per stock unit), best_before_date and
+                purchased_date (YYYY-MM-DD), location_id, shopping_location_id and note. Example:
                 '[{"product_id": 39, "amount": 1, "price": 15.5}]'.
         """
         parsed_items = _parse_json_arg(items, "items")

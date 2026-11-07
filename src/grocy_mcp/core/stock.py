@@ -101,9 +101,12 @@ async def stock_add(
     price: float | None = None,
     best_before_date: str | None = None,
     location_id: int | None = None,
+    location: str | None = None,
+    purchased_date: str | None = None,
+    shopping_location_id: int | None = None,
     **kwargs,
 ) -> str:
-    """Add stock for a product, optionally with the price paid, best-before date and location.
+    """Add stock for a product, optionally with price, dates, location and store.
 
     Args:
         client: Grocy client.
@@ -111,19 +114,32 @@ async def stock_add(
         amount: Quantity to add.
         price: Price per stock unit.
         best_before_date: Best-before date as YYYY-MM-DD.
-        location_id: Location to add the stock to, when not the product's default.
+        location_id: Location ID to add the stock to, when not the product's default.
+        location: Location name or numeric ID, as an alternative to ``location_id``.
+        purchased_date: Purchase date as YYYY-MM-DD.
+        shopping_location_id: Store (shopping location) ID.
     """
     if price is not None and not (math.isfinite(price) and price >= 0):
         raise GrocyValidationError("price must be a finite number that is not negative.")
-    if best_before_date is not None and not is_iso_date(best_before_date):
-        raise GrocyValidationError("best_before_date must be formatted as YYYY-MM-DD.")
+    for field, value in (
+        ("best_before_date", best_before_date),
+        ("purchased_date", purchased_date),
+    ):
+        if value is not None and not is_iso_date(value):
+            raise GrocyValidationError(f"{field} must be formatted as YYYY-MM-DD.")
+    if location is not None and location_id is not None:
+        raise GrocyValidationError("Pass either location or location_id, not both.")
+    product_id = await resolve_product(client, product)
+    if location is not None:
+        location_id = await resolve_location(client, location)
     options = {
         "price": price,
         "best_before_date": best_before_date,
         "location_id": location_id,
+        "purchased_date": purchased_date,
+        "shopping_location_id": shopping_location_id,
         **kwargs,
     }
-    product_id = await resolve_product(client, product)
     await client.add_stock(
         product_id, amount, **{k: v for k, v in options.items() if v is not None}
     )

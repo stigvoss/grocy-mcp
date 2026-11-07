@@ -353,3 +353,38 @@ async def test_stock_add_rejects_non_strict_dates(mock_client, value):
     with pytest.raises(GrocyValidationError, match="YYYY-MM-DD"):
         await stock_add(mock_client, "Beef", 1.0, best_before_date=value)
     mock_client.add_stock.assert_not_called()
+
+
+async def test_stock_add_passes_purchased_date_store_and_location_name(mock_client):
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+        patch("grocy_mcp.core.stock.resolve_location", return_value=4) as resolve_loc,
+    ):
+        await stock_add(
+            mock_client,
+            "Beef",
+            1.0,
+            location="Freezer",
+            purchased_date="2026-11-07",
+            shopping_location_id=2,
+        )
+    resolve_loc.assert_called_once_with(mock_client, "Freezer")
+    mock_client.add_stock.assert_called_once_with(
+        1, 1.0, location_id=4, purchased_date="2026-11-07", shopping_location_id=2
+    )
+
+
+async def test_stock_add_rejects_location_and_location_id_together(mock_client):
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    with pytest.raises(GrocyValidationError, match="either location or location_id"):
+        await stock_add(mock_client, "Beef", 1.0, location="Freezer", location_id=4)
+    mock_client.add_stock.assert_not_called()
+
+
+async def test_stock_add_rejects_bad_purchased_date(mock_client):
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    with pytest.raises(GrocyValidationError, match="purchased_date"):
+        await stock_add(mock_client, "Beef", 1.0, purchased_date="20261107")
+    mock_client.add_stock.assert_not_called()
