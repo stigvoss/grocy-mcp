@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from grocy_mcp.core.utils import is_iso_date
+
 
 def _normalize_optional_text(value: str | None) -> str | None:
     """Collapse whitespace and normalize empty strings to None."""
@@ -69,6 +71,9 @@ class WorkflowApplyItem(BaseModel):
     product_id: int
     amount: float
     note: str | None = None
+    price: float | None = Field(default=None, allow_inf_nan=False)
+    best_before_date: str | None = None
+    location_id: int | None = None
 
     model_config = {"extra": "forbid"}
 
@@ -83,6 +88,21 @@ class WorkflowApplyItem(BaseModel):
     @classmethod
     def normalize_note(cls, value: str | None) -> str | None:
         return _normalize_optional_text(value)
+
+    @field_validator("price")
+    @classmethod
+    def validate_price(cls, value: float | None) -> float | None:
+        if value is not None and value < 0:
+            raise ValueError("price must not be negative")
+        return value
+
+    @field_validator("best_before_date")
+    @classmethod
+    def validate_best_before_date(cls, value: str | None) -> str | None:
+        value = _normalize_optional_text(value)
+        if value is not None and not is_iso_date(value):
+            raise ValueError("best_before_date must be formatted as YYYY-MM-DD")
+        return value
 
 
 class WorkflowShoppingReconcilePreviewAction(BaseModel):

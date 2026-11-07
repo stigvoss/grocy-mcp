@@ -281,3 +281,47 @@ async def test_stock_levels_includes_zero_stock_and_filters(mock_client):
     assert [r["name"] for r in await stock_levels_data(mock_client, high_churn=True)] == ["Milk"]
     by_group = await stock_levels_data(mock_client, product_group="cooking")
     assert [r["name"] for r in by_group] == ["Cooking cream"]
+
+
+async def test_stock_add_passes_price_best_before_and_location(mock_client):
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await stock_add(
+            mock_client, "Beef", 2.0, price=15.5, best_before_date="2027-01-31", location_id=3
+        )
+    mock_client.add_stock.assert_called_once_with(
+        1, 2.0, price=15.5, best_before_date="2027-01-31", location_id=3
+    )
+    assert "price 15.5" in result
+
+
+async def test_stock_add_rejects_bad_price_and_date(mock_client):
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        with pytest.raises(GrocyValidationError, match="price"):
+            await stock_add(mock_client, "Beef", 1.0, price=-1)
+        with pytest.raises(GrocyValidationError, match="YYYY-MM-DD"):
+            await stock_add(mock_client, "Beef", 1.0, best_before_date="31/01/2027")
+    mock_client.add_stock.assert_not_called()
+
+
+@pytest.mark.parametrize("price", [float("nan"), float("inf"), -0.5])
+async def test_stock_add_rejects_non_finite_or_negative_price(mock_client, price):
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1) as resolve,
+        pytest.raises(GrocyValidationError, match="price"),
+    ):
+        await stock_add(mock_client, "Beef", 1.0, price=price)
+    resolve.assert_not_called()
+    mock_client.add_stock.assert_not_called()
+
+
+@pytest.mark.parametrize("value", ["20270131", "2027-W04-7", "2027-1-31"])
+async def test_stock_add_rejects_non_strict_dates(mock_client, value):
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    with pytest.raises(GrocyValidationError, match="YYYY-MM-DD"):
+        await stock_add(mock_client, "Beef", 1.0, best_before_date=value)
+    mock_client.add_stock.assert_not_called()

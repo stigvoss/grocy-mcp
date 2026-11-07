@@ -204,15 +204,33 @@ def create_mcp_server() -> FastMCP:
             return await stock_product_info(client, product)
 
     @mcp.tool()
-    async def stock_add_tool(product: str, amount: float) -> str:
+    async def stock_add_tool(
+        product: str,
+        amount: float,
+        price: float | None = None,
+        best_before_date: str | None = None,
+        location_id: int | None = None,
+    ) -> str:
         """Add stock for a product (e.g. after a purchase).
 
         Args:
             product: Product name (e.g. "Milk") or numeric product ID.
             amount: Quantity to add (e.g. 2.0 for two units).
+            price: Optional price paid per stock unit. Stock rows cannot be edited afterwards,
+                   so pass it when adding if it is known.
+            best_before_date: Optional best-before date, YYYY-MM-DD.
+            location_id: Optional location ID to add the stock to (e.g. the freezer), instead
+                         of the product's default location.
         """
         async with _get_client() as client:
-            return await stock_add(client, product, amount)
+            return await stock_add(
+                client,
+                product,
+                amount,
+                price=price,
+                best_before_date=best_before_date,
+                location_id=location_id,
+            )
 
     @mcp.tool()
     async def stock_consume_tool(product: str, amount: float) -> str:
@@ -1068,7 +1086,10 @@ def create_mcp_server() -> FastMCP:
         resolve names implicitly.
 
         Args:
-            items: JSON array of confirmed apply items, each with product_id and amount.
+            items: JSON array of confirmed apply items, each with product_id and amount, and
+                optionally price (per stock unit), best_before_date (YYYY-MM-DD),
+                location_id and note. Example:
+                '[{"product_id": 39, "amount": 1, "price": 15.5}]'.
         """
         parsed_items = _parse_json_arg(items, "items")
         async with _get_client() as client:
