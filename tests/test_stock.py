@@ -904,6 +904,34 @@ async def test_stock_entries_lists_ids_and_location_names(mock_client):
     assert [r["entry_id"] for r in freezer] == [25]
 
 
+async def test_stock_search_matches_userfields_when_asked(mock_client):
+    async def get_objects(entity, query=None):
+        return {
+            "products": [
+                {
+                    "id": 1,
+                    "name": "Minced beef",
+                    "userfields": {
+                        "bilkatogo": "https://x/search?query=hakket%20oksek%C3%B8d",
+                        "ai_notes": "",
+                    },
+                },
+                {"id": 2, "name": "Milk", "userfields": {"ai_notes": "mælk"}},
+            ],
+            "product_barcodes": [],
+        }[entity]
+
+    mock_client.get_objects.side_effect = get_objects
+    assert "No products found" in await stock_search(mock_client, "hakket")
+    result = await stock_search(mock_client, "hakket", include_userfields=True)
+    assert "[1] Minced beef (userfield: bilkatogo)" in result
+    assert "Milk" not in result
+    assert "[1] Minced beef" in await stock_search(mock_client, "oksekød", include_userfields=True)
+    # name matches are not tagged and are not duplicated
+    both = await stock_search(mock_client, "minced", include_userfields=True)
+    assert both.count("Minced beef") == 1 and "userfield" not in both
+
+
 async def test_unknown_numeric_location_is_an_error_not_an_empty_result(mock_client):
     from grocy_mcp.core.stock import stock_by_location_data, stock_levels_data
     from grocy_mcp.exceptions import GrocyValidationError
@@ -979,3 +1007,22 @@ async def test_stock_entry_edit_overlapping_edits_do_not_overwrite_each_other():
         stock_entry_edit(client, 24, price=9.5),
     )
     assert client.entry["amount"] == 5 and client.entry["price"] == 9.5
+
+
+async def test_stock_search_finds_encoded_uppercase_in_userfields(mock_client):
+    async def get_objects(entity, query=None):
+        return {
+            "products": [
+                {
+                    "id": 1,
+                    "name": "Beef",
+                    "userfields": {"bilkatogo": "https://x/?query=OKSEK%C3%98D"},
+                }
+            ],
+            "product_barcodes": [],
+        }[entity]
+
+    mock_client.get_objects.side_effect = get_objects
+    assert "[1] Beef (userfield: bilkatogo)" in await stock_search(
+        mock_client, "oksekød", include_userfields=True
+    )

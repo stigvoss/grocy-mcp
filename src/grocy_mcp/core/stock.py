@@ -7,7 +7,7 @@ import math
 import weakref
 
 from grocy_mcp.client import GrocyClient
-from grocy_mcp.core.products import is_truthy_value
+from grocy_mcp.core.products import is_truthy_value, userfield_contains
 from grocy_mcp.core.resolve import resolve_location, resolve_product
 from grocy_mcp.core.utils import format_amount, is_iso_date, tidy_amount, zero_rows_note
 from grocy_mcp.exceptions import GrocyValidationError
@@ -479,11 +479,12 @@ async def stock_by_location_data(
     return result
 
 
-async def stock_search(client: GrocyClient, query: str) -> str:
-    """Search for products by name or barcode."""
+async def stock_search(client: GrocyClient, query: str, include_userfields: bool = False) -> str:
+    """Search for products by name or barcode, optionally also in their userfield text."""
     products = await client.get_objects("products")
     query_lower = query.lower()
     matches = [p for p in products if query_lower in p.get("name", "").lower()]
+    via: dict[int, list[str]] = {}
 
     barcodes = await client.get_objects("product_barcodes")
     barcode_ids = {b["product_id"] for b in barcodes if query_lower in b.get("barcode", "").lower()}
@@ -491,12 +492,25 @@ async def stock_search(client: GrocyClient, query: str) -> str:
         if p["id"] in barcode_ids and p not in matches:
             matches.append(p)
 
+    if include_userfields:
+        for p in products:
+            fields = [
+                name
+                for name, value in (p.get("userfields") or {}).items()
+                if userfield_contains(value, query)
+            ]
+            if fields:
+                via[p["id"]] = fields
+                if p not in matches:
+                    matches.append(p)
+
     if not matches:
         return f"No products found matching '{query}'."
 
     lines = [f"Products matching '{query}':"]
     for p in matches:
-        lines.append(f"  [{p['id']}] {p.get('name', '?')}")
+        suffix = f" (userfield: {', '.join(via[p['id']])})" if p["id"] in via else ""
+        lines.append(f"  [{p['id']}] {p.get('name', '?')}{suffix}")
     return "\n".join(lines)
 
 

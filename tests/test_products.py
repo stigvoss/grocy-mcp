@@ -43,3 +43,88 @@ async def test_fields_filter_returns_only_requested_keys(mock_client):
 async def test_invalid_fields_rejected(mock_client):
     with pytest.raises(GrocyValidationError):
         await products_list_data(mock_client, fields=[""])
+
+
+@pytest.fixture
+def userfield_client():
+    client = AsyncMock()
+    client.get_objects.return_value = [
+        {
+            "id": 1,
+            "name": "Beef",
+            "userfields": {
+                "bilkatogo_ids": "19753,41377,183283",
+                "bilkatogo": "https://x/search?query=hakket%20oksek%C3%B8d",
+                "ai_notes": "Freeze on arrival",
+            },
+        },
+        {"id": 2, "name": "Skyr", "userfields": {"bilkatogo_ids": "19856, 84678"}},
+        {
+            "id": 3,
+            "name": "Pork",
+            "userfields": {"bilkatogo_ids": "119753", "ai_notes": "svinekød"},
+        },
+        {"id": 4, "name": "Plain", "userfields": None},
+    ]
+    return client
+
+
+async def test_userfields_match_is_a_trimmed_token_not_a_substring(userfield_client):
+    ids = lambda r: [p["id"] for p in r]
+    assert ids(
+        await products_list_data(userfield_client, userfields_match={"bilkatogo_ids": "19753"})
+    ) == [1]
+    assert ids(
+        await products_list_data(userfield_client, userfields_match={"bilkatogo_ids": "84678"})
+    ) == [2]
+    assert ids(
+        await products_list_data(userfield_client, userfields_match={"bilkatogo_ids": " 119753 "})
+    ) == [3]
+    assert (
+        await products_list_data(userfield_client, userfields_match={"bilkatogo_ids": "9753"}) == []
+    )
+
+
+async def test_userfields_contains_matches_substring_and_url_decoded_text(userfield_client):
+    ids = lambda r: [p["id"] for p in r]
+    assert ids(
+        await products_list_data(
+            userfield_client, userfields_contains={"bilkatogo": "hakket oksekød"}
+        )
+    ) == [1]
+    assert ids(
+        await products_list_data(userfield_client, userfields_contains={"ai_notes": "FREEZE"})
+    ) == [1]
+    assert ids(
+        await products_list_data(userfield_client, userfields_contains={"bilkatogo_ids": "9753"})
+    ) == [1, 3]
+
+
+async def test_userfield_filters_combine_and_validate(userfield_client):
+    both = await products_list_data(
+        userfield_client,
+        userfields_match={"bilkatogo_ids": "19753"},
+        userfields_contains={"ai_notes": "freeze"},
+        fields=["id"],
+    )
+    assert both == [{"id": 1}]
+    for bad in ({"bilkatogo_ids": ""}, {"": 5}, "x"):
+        with pytest.raises(GrocyValidationError):
+            await products_list_data(userfield_client, userfields_match=bad)
+
+
+def test_userfield_contains_lowercases_after_url_decoding():
+    from grocy_mcp.core.products import userfield_contains
+
+    assert userfield_contains("https://x/?query=OKSEK%C3%98D", "oksekød")
+    assert userfield_contains("https://x/?query=hakket%20OKSEK%C3%98D", "HAKKET oksekØd")
+    assert userfield_contains("OKSEK%c3%98d", "oksekød")
+    assert not userfield_contains("https://x/?query=mælk", "oksekød")
+
+
+async def test_encoded_uppercase_is_found_by_both_search_paths(userfield_client):
+    userfield_client.get_objects.return_value = [
+        {"id": 9, "name": "Beef", "userfields": {"bilkatogo": "https://x/?query=OKSEK%C3%98D"}}
+    ]
+    found = await products_list_data(userfield_client, userfields_contains={"bilkatogo": "oksekød"})
+    assert [p["id"] for p in found] == [9]

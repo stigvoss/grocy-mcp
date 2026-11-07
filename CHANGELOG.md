@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Finding products by userfield content**: `stock_search_tool` takes `include_userfields` (matches
+  userfield text incl. URL-decoded store links and says which field matched);
+  `products_list_tool` takes `userfields_match` (comma-separated token, whitespace trimmed) and
+  `userfields_contains` (substring)
 - **Correcting stock**: `stock_entries_tool` lists a product's entries with entry IDs,
   `stock_entry_edit_tool` changes amount, dates, price, location or opened state of one entry, and
   `stock_undo_tool` reverses a booking (the ID shown in `stock_journal_tool`)
