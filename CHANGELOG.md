@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Price and details when adding stock**: `stock_add_tool` (and `grocy stock add`) and the items of
+  `workflow_stock_intake_apply_tool` accept optional `price` (per stock unit), `best_before_date`
+  (YYYY-MM-DD) and `location_id`
 - **Bulk product read**: `products_list_tool` returns every product with its `userfields` in one
   request, with optional `fields` (e.g. `userfields.bilkatogo_ids`) and `userfields_set` filters
 - **Stock levels**: `stock_levels_tool` lists all active products including those at 0 stock, with
@@ -19,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `stock_journal_tool` rounds amounts and hides entries that round to zero (float residue such as
   2.2e-16 from opening or transferring), noting how many were hidden
+- `entity_create_tool` and `entity_update_tool` translate Grocy constraint errors (missing required
+  field, duplicate, unknown ID) into short messages instead of returning raw SQL errors
 - `stock_open_tool` returns a clear message (product, unopened and opened amounts) instead of a raw
   API error when there is not enough unopened stock
 - `entity_update_tool` rejects a `userfields` key up front and points to `userfields_set_tool`

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import math
+
 from grocy_mcp.client import GrocyClient
 from grocy_mcp.core.products import is_truthy_value
 from grocy_mcp.core.resolve import resolve_location, resolve_product
+from grocy_mcp.core.utils import is_iso_date
 from grocy_mcp.exceptions import GrocyValidationError
 
 
@@ -91,11 +94,41 @@ async def stock_product_info(client: GrocyClient, product: str) -> str:
     )
 
 
-async def stock_add(client: GrocyClient, product: str, amount: float, **kwargs) -> str:
-    """Add stock for a product."""
+async def stock_add(
+    client: GrocyClient,
+    product: str,
+    amount: float,
+    price: float | None = None,
+    best_before_date: str | None = None,
+    location_id: int | None = None,
+    **kwargs,
+) -> str:
+    """Add stock for a product, optionally with the price paid, best-before date and location.
+
+    Args:
+        client: Grocy client.
+        product: Product name or numeric ID.
+        amount: Quantity to add.
+        price: Price per stock unit.
+        best_before_date: Best-before date as YYYY-MM-DD.
+        location_id: Location to add the stock to, when not the product's default.
+    """
+    if price is not None and not (math.isfinite(price) and price >= 0):
+        raise GrocyValidationError("price must be a finite number that is not negative.")
+    if best_before_date is not None and not is_iso_date(best_before_date):
+        raise GrocyValidationError("best_before_date must be formatted as YYYY-MM-DD.")
+    options = {
+        "price": price,
+        "best_before_date": best_before_date,
+        "location_id": location_id,
+        **kwargs,
+    }
     product_id = await resolve_product(client, product)
-    await client.add_stock(product_id, amount, **kwargs)
-    return f"Added {amount} of '{product}' to stock."
+    await client.add_stock(
+        product_id, amount, **{k: v for k, v in options.items() if v is not None}
+    )
+    suffix = f" at price {price:g}" if price is not None else ""
+    return f"Added {amount} of '{product}' to stock{suffix}."
 
 
 async def stock_consume(client: GrocyClient, product: str, amount: float, **kwargs) -> str:

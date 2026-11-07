@@ -118,3 +118,54 @@ async def test_entity_update_plain_rename_still_works(mock_client):
     result = await entity_manage(mock_client, "products", "update", obj_id=1, data={"name": "New"})
     mock_client.update_object.assert_called_once_with("products", 1, {"name": "New"})
     assert "Updated" in result
+
+
+async def test_entity_create_not_null_error_is_translated(mock_client):
+    mock_client.create_object.side_effect = GrocyValidationError(
+        'Validation error: {"error_message":"SQLSTATE[23000]: Integrity constraint violation: '
+        '19 NOT NULL constraint failed: products.location_id"}'
+    )
+    with pytest.raises(GrocyValidationError) as exc:
+        await entity_manage(mock_client, "products", "create", data={"name": "X"})
+    message = str(exc.value)
+    assert "required field 'location_id'" in message
+    assert "SQLSTATE" not in message
+
+
+async def test_entity_create_unique_error_is_translated(mock_client):
+    mock_client.create_object.side_effect = GrocyValidationError(
+        "Validation error: UNIQUE constraint failed: products.name"
+    )
+    with pytest.raises(GrocyValidationError, match="already exists"):
+        await entity_manage(mock_client, "products", "create", data={"name": "X"})
+
+
+async def test_entity_update_foreign_key_error_is_translated(mock_client):
+    mock_client.update_object.side_effect = GrocyValidationError(
+        "Validation error: FOREIGN KEY constraint failed"
+    )
+    with pytest.raises(GrocyValidationError, match="does not exist"):
+        await entity_manage(mock_client, "products", "update", obj_id=1, data={"location_id": 99})
+
+
+async def test_entity_create_other_validation_errors_pass_through(mock_client):
+    mock_client.create_object.side_effect = GrocyValidationError("Validation error: other")
+    with pytest.raises(GrocyValidationError, match="other"):
+        await entity_manage(mock_client, "products", "create", data={"name": "X"})
+
+
+async def test_entity_create_qu_id_field_gets_lookup_hint(mock_client):
+    mock_client.create_object.side_effect = GrocyValidationError(
+        "NOT NULL constraint failed: products.qu_id_stock"
+    )
+    with pytest.raises(GrocyValidationError, match="qu_id_stock.*find a valid ID"):
+        await entity_manage(mock_client, "products", "create", data={"name": "X"})
+
+
+async def test_entity_create_composite_unique_error_names_all_columns(mock_client):
+    mock_client.create_object.side_effect = GrocyValidationError(
+        "UNIQUE constraint failed: product_barcodes.barcode, product_barcodes.shopping_location_id"
+    )
+    with pytest.raises(GrocyValidationError) as exc:
+        await entity_manage(mock_client, "product_barcodes", "create", data={})
+    assert "combination of 'barcode', 'shopping_location_id'" in str(exc.value)
