@@ -330,25 +330,29 @@ async def stock_open(client: GrocyClient, product: str, amount: float = 1.0) -> 
     stock.
     """
     product_id = await resolve_product(client, product)
-    info = await client.get_stock_product(product_id)
-    name = (info.get("product") or {}).get("name", f"Product {product_id}")
-    _, opened, unopened = _split_amounts(info)
+    # Opening rewrites entries, so it shares the per-product lock with consume, transfer,
+    # inventory, entry edits and undo: an edit that read the entry before it was opened would
+    # otherwise write the unopened state back.
+    async with _product_lock(product_id):
+        info = await client.get_stock_product(product_id)
+        name = (info.get("product") or {}).get("name", f"Product {product_id}")
+        _, opened, unopened = _split_amounts(info)
 
-    if unopened < amount:
-        return (
-            f"Cannot open {format_amount(amount)} of '{name}': unopened amount is {format_amount(unopened)} "
-            f"(already opened: {format_amount(opened)}). Add stock first, or consume the opened amount."
-        )
+        if unopened < amount:
+            return (
+                f"Cannot open {format_amount(amount)} of '{name}': unopened amount is {format_amount(unopened)} "
+                f"(already opened: {format_amount(opened)}). Add stock first, or consume the opened amount."
+            )
 
-    try:
-        await client.open_stock(product_id, amount)
-    except GrocyValidationError:
-        return (
-            f"Grocy refused to open {format_amount(amount)} of '{name}' "
-            f"(unopened: {format_amount(unopened)}, opened: {format_amount(opened)}). "
-            "Check the product's stock and 'opened' settings."
-        )
-    return f"Opened {amount} of '{product}'."
+        try:
+            await client.open_stock(product_id, amount)
+        except GrocyValidationError:
+            return (
+                f"Grocy refused to open {format_amount(amount)} of '{name}' "
+                f"(unopened: {format_amount(unopened)}, opened: {format_amount(opened)}). "
+                "Check the product's stock and 'opened' settings."
+            )
+        return f"Opened {amount} of '{product}'."
 
 
 async def stock_levels_data(
