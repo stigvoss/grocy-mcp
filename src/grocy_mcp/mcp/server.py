@@ -152,7 +152,8 @@ def create_mcp_server() -> FastMCP:
         """List all active products with their stock amount, including products at 0 stock.
 
         Unlike stock_overview_tool, products that are out of stock are included with
-        amount 0. Each row has product_id, name, amount, stock_unit, default_location,
+        amount 0. Each row has product_id, name, amount (own stock), amount_aggregated
+        (own stock plus child products, for parent products), stock_unit, default_location,
         product_group_id and high_churn.
 
         Args:

@@ -241,7 +241,7 @@ async def test_stock_open_validation_error_becomes_message(mock_client):
 async def test_stock_levels_includes_zero_stock_and_filters(mock_client):
     from grocy_mcp.core.stock import stock_levels_data
 
-    mock_client.get_stock.return_value = [{"product_id": 1, "amount": 3}]
+    mock_client.get_stock.return_value = [{"product_id": 1, "amount": 3, "amount_aggregated": 3}]
 
     async def get_objects(entity, query=None):
         return {
@@ -281,3 +281,31 @@ async def test_stock_levels_includes_zero_stock_and_filters(mock_client):
     assert [r["name"] for r in await stock_levels_data(mock_client, high_churn=True)] == ["Milk"]
     by_group = await stock_levels_data(mock_client, product_group="cooking")
     assert [r["name"] for r in by_group] == ["Cooking cream"]
+
+
+async def test_stock_levels_reports_aggregated_amount_for_parent(mock_client):
+    from grocy_mcp.core.stock import stock_levels_data
+
+    mock_client.get_stock.return_value = [
+        {"product_id": 10, "amount": 0, "amount_aggregated": 4},
+        {"product_id": 11, "amount": 4, "amount_aggregated": 4},
+    ]
+
+    async def get_objects(entity, query=None):
+        return {
+            "products": [
+                {"id": 10, "name": "Pasta", "qu_id_stock": 1},
+                {"id": 11, "name": "Penne", "qu_id_stock": 1, "parent_product_id": 10},
+                {"id": 12, "name": "Empty", "qu_id_stock": 1},
+            ],
+            "quantity_units": [{"id": 1, "name": "Pack"}],
+            "locations": [],
+        }[entity]
+
+    mock_client.get_objects.side_effect = get_objects
+
+    rows = {r["name"]: r for r in await stock_levels_data(mock_client)}
+    assert rows["Pasta"]["amount"] == 0
+    assert rows["Pasta"]["amount_aggregated"] == 4
+    assert rows["Penne"]["amount_aggregated"] == 4
+    assert rows["Empty"]["amount_aggregated"] == 0

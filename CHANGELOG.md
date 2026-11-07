@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `stock_levels_tool` rows include `amount_aggregated` (own stock plus child products) so parent
+  products with stocked children are not reported as out of stock
 - `stock_open_tool` returns a clear message (product, unopened and opened amounts) instead of a raw
   API error when there is not enough unopened stock
 - `entity_update_tool` rejects a `userfields` key up front and points to `userfields_set_tool`
