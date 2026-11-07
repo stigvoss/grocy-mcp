@@ -529,3 +529,61 @@ async def test_workflow_stock_apply_error_after_opening_reports_what_was_opened(
         )
     entry = result["results"][0]
     assert entry["partial"] is True and "1 opened" in entry["error"]
+
+
+async def test_inventory_float_residue_in_the_opened_count_is_not_a_failure():
+    client = AsyncMock()
+    # 1.0000000000000007 opened is, to Grocy, exactly the requested 1: nothing to open or refuse
+    client.get_stock_product.return_value = {
+        "stock_amount": 2,
+        "stock_amount_opened": 1.0000000000000007,
+    }
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await workflow_stock_apply_data(
+            client,
+            [{"action": "inventory", "product": "Milk", "new_amount": 2, "opened_amount": 1}],
+        )
+    client.inventory_stock.assert_not_called()
+    client.open_stock.assert_not_called()
+    assert result["results"][0]["ok"] is True and result["applied_count"] == 1
+
+
+async def test_inventory_residue_below_the_requested_opened_count_does_not_trigger_an_open():
+    client = AsyncMock()
+    client.get_stock_product.return_value = {
+        "stock_amount": 2,
+        "stock_amount_opened": 0.9999999999999999,
+    }
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await workflow_stock_apply_data(
+            client,
+            [{"action": "inventory", "product": "Milk", "new_amount": 2, "opened_amount": 1}],
+        )
+    client.open_stock.assert_not_called()
+    assert result["results"][0]["ok"] is True
+
+
+async def test_inventory_residue_in_the_total_does_not_cause_a_needless_inventory():
+    client = AsyncMock()
+    client.get_stock_product.return_value = {
+        "stock_amount": 2.0000000000000004,
+        "stock_amount_opened": 0,
+    }
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        await workflow_stock_apply_data(
+            client, [{"action": "inventory", "product": "Milk", "new_amount": 2}]
+        )
+    client.inventory_stock.assert_not_called()  # Grocy would reject an inventory equal to stock
+
+
+async def test_open_with_residue_in_the_unopened_amount_is_allowed():
+    client = AsyncMock()
+    client.get_stock_product.return_value = {
+        "product": {"name": "Milk"},
+        "stock_amount": 1,
+        "stock_amount_opened": 1.1102230246251565e-16,
+    }
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await workflow_stock_apply_data(client, [{"action": "open", "product": "Milk"}])
+    client.open_stock.assert_awaited_once()
+    assert result["results"][0]["ok"] is True

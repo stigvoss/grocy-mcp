@@ -313,14 +313,14 @@ async def stock_inventory_outcome(
         done: list[str] = []  # writes that really happened, so a later failure can say so
         try:
             total, _, _ = _split_amounts(await client.get_stock_product(product_id))
-            if total != new_amount:
+            if abs(total - new_amount) > _AMOUNT_EPSILON:
                 # Grocy rejects an inventory that equals the current amount, so skip it then
                 await client.inventory_stock(product_id, new_amount)
                 done.append(f"stock set to {format_amount(new_amount)}")
             total, opened, unopened = _split_amounts(await client.get_stock_product(product_id))
 
             note = ""
-            if opened_amount is not None and opened < opened_amount:
+            if opened_amount is not None and opened < opened_amount - _AMOUNT_EPSILON:
                 missing = format_amount(opened_amount - opened)
                 try:
                     await client.open_stock(product_id, opened_amount - opened)
@@ -334,12 +334,14 @@ async def stock_inventory_outcome(
                         f"{format_amount(opened_amount)} opened failed."
                     )
                 total, opened, unopened = _split_amounts(await client.get_stock_product(product_id))
-            if opened_amount is not None and opened > opened_amount:
+            if opened_amount is not None and opened > opened_amount + _AMOUNT_EPSILON:
                 note += (
                     f" {format_amount(opened)} are open but {format_amount(opened_amount)} were "
                     "requested; Grocy cannot un-open units."
                 )
-            elif opened_amount is not None and opened < opened_amount and not note:
+            elif (
+                opened_amount is not None and opened < opened_amount - _AMOUNT_EPSILON and not note
+            ):
                 note = (
                     f" Only {format_amount(opened)} of the requested "
                     f"{format_amount(opened_amount)} are opened."
@@ -385,28 +387,31 @@ async def stock_open_outcome(
 ) -> StockOutcome:
     """Mark stock as opened; ``ok`` is False when there is not enough unopened stock."""
     product_id = await resolve_product(client, product)
-    info = await client.get_stock_product(product_id)
-    name = (info.get("product") or {}).get("name", f"Product {product_id}")
-    _, opened, unopened = _split_amounts(info)
+    # Opening rewrites entries, so it shares the per-product lock with consume, transfer,
+    # inventory and entry edits.
+    async with _product_lock(product_id):
+        info = await client.get_stock_product(product_id)
+        name = (info.get("product") or {}).get("name", f"Product {product_id}")
+        _, opened, unopened = _split_amounts(info)
 
-    if unopened < amount:
-        return StockOutcome(
-            False,
-            f"Cannot open {format_amount(amount)} of '{name}': unopened amount is "
-            f"{format_amount(unopened)} (already opened: {format_amount(opened)}). "
-            "Add stock first, or consume the opened amount.",
-        )
+        if unopened < amount - _AMOUNT_EPSILON:
+            return StockOutcome(
+                False,
+                f"Cannot open {format_amount(amount)} of '{name}': unopened amount is "
+                f"{format_amount(unopened)} (already opened: {format_amount(opened)}). "
+                "Add stock first, or consume the opened amount.",
+            )
 
-    try:
-        await client.open_stock(product_id, amount)
-    except GrocyValidationError:
-        return StockOutcome(
-            False,
-            f"Grocy refused to open {format_amount(amount)} of '{name}' "
-            f"(unopened: {format_amount(unopened)}, opened: {format_amount(opened)}). "
-            "Check the product's stock and 'opened' settings.",
-        )
-    return StockOutcome(True, f"Opened {amount} of '{product}'.")
+        try:
+            await client.open_stock(product_id, amount)
+        except GrocyValidationError:
+            return StockOutcome(
+                False,
+                f"Grocy refused to open {format_amount(amount)} of '{name}' "
+                f"(unopened: {format_amount(unopened)}, opened: {format_amount(opened)}). "
+                "Check the product's stock and 'opened' settings.",
+            )
+        return StockOutcome(True, f"Opened {amount} of '{product}'.")
 
 
 async def stock_open(client: GrocyClient, product: str, amount: float = 1.0) -> str:
