@@ -458,3 +458,37 @@ def test_word_similarity_is_the_same_in_both_directions():
 
     assert _word_ratio("ppeper", "pepper") == _word_ratio("pepper", "ppeper")
     assert _word_ratio("ppeper", "pepper") >= 0.83
+
+
+@pytest.mark.parametrize("name", ["🥛", "  🥛 ", "!!!", "  ??  "])
+def test_symbol_only_names_are_compared_by_their_full_text(name):
+    from grocy_mcp.core.products import find_near_duplicates
+
+    existing = [{"id": 1, "name": name.strip()}]
+    assert [f["product_id"] for f in find_near_duplicates(name, existing)] == [1]
+
+
+def test_different_symbol_only_names_are_not_duplicates():
+    from grocy_mcp.core.products import find_near_duplicates
+
+    assert find_near_duplicates("🥛", [{"id": 1, "name": "🍞"}, {"id": 2, "name": "Milk"}]) == []
+    assert find_near_duplicates("Milk", [{"id": 1, "name": "🥛"}]) == []
+
+
+async def test_product_create_does_not_create_a_second_emoji_only_product(create_client):
+    from grocy_mcp.core.products import product_create_data
+
+    async def get_objects(entity, query=None):
+        return {
+            "quantity_units": [{"id": 3, "name": "Pack"}],
+            "locations": [{"id": 2, "name": "Fridge"}],
+            "product_groups": [],
+            "products": [{"id": 5, "name": "🥛"}],
+        }[entity]
+
+    create_client.get_objects.side_effect = get_objects
+    result = await product_create_data(create_client, "🥛", "Pack", "Fridge")
+    assert result["created"] is False and result["duplicates"][0]["product_id"] == 5
+    create_client.create_object.assert_not_called()
+    forced = await product_create_data(create_client, "🥛", "Pack", "Fridge", force=True)
+    assert forced["created"] is True

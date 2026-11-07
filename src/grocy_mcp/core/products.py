@@ -199,19 +199,25 @@ def _words_similar(a: list[str], b: list[str]) -> bool:
     return max(best.values()) / n >= _WORDS_MEAN_RATIO
 
 
+def _plain_name(name: str) -> str:
+    """Case-folded name with whitespace collapsed; unlike the word key it keeps every character,
+    so names made only of symbols or emoji can still be compared."""
+    return " ".join(name.casefold().split())
+
+
 def find_near_duplicates(name: str, products: list[dict]) -> list[dict]:
     """Return existing products whose name is the same, or nearly the same, as ``name``."""
+    plain = _plain_name(name)
     key = _name_key(name)
     words = _words(name)
     found = []
     for product in products:
         other_name = product.get("name") or ""
-        other = _name_key(other_name)
-        if not other:
+        if not other_name.strip():
             continue
-        if other == key:
+        if _plain_name(other_name) == plain or (key and _name_key(other_name) == key):
             reason = "same name (ignoring case and word order)"
-        elif _words_similar(words, _words(other_name)):
+        elif key and _words_similar(words, _words(other_name)):
             reason = "very similar name"
         else:
             continue
