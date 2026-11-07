@@ -281,3 +281,36 @@ async def test_get_stock_entry_null_response_is_not_found(client, mock_api):
     mock_api.get("/stock/entry/999").mock(return_value=httpx.Response(200, content=b"null"))
     with pytest.raises(GrocyNotFoundError, match="may have been consumed"):
         await client.get_stock_entry(999)
+
+
+async def test_unreadable_json_becomes_a_grocy_server_error(client, mock_api):
+    mock_api.get("/stock").mock(return_value=httpx.Response(200, text="<html>not json</html>"))
+    with pytest.raises(GrocyServerError, match="unreadable response to GET /api/stock"):
+        await client.get_stock()
+
+
+async def test_inventory_then_unreadable_details_reports_a_partial_not_a_crash(client, mock_api):
+    from grocy_mcp.core.stock import stock_inventory_outcome
+
+    mock_api.get("/stock/products/1").mock(
+        side_effect=[
+            httpx.Response(200, json={"stock_amount": 3, "stock_amount_opened": 0}),
+            httpx.Response(200, text="<html>gateway hiccup</html>"),
+        ]
+    )
+    write = mock_api.post("/stock/products/1/inventory").mock(
+        return_value=httpx.Response(200, json=[{"id": 1}])
+    )
+    outcome = await stock_inventory_outcome(client, "1", 2.0)
+    assert write.called
+    assert outcome.ok is False and outcome.partial is True
+    assert "stock set to 2" in outcome.message and "unreadable response" in outcome.message
+
+
+async def test_unreadable_json_before_any_write_is_an_ordinary_grocy_error(client, mock_api):
+    from grocy_mcp.core.stock import stock_inventory_outcome
+
+    mock_api.get("/stock/products/1").mock(return_value=httpx.Response(200, text="oops"))
+    # no inventory route is registered: respx would fail the test if a write were attempted
+    with pytest.raises(GrocyServerError):
+        await stock_inventory_outcome(client, "1", 2.0)
