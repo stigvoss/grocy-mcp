@@ -1,6 +1,7 @@
 """Tests for bulk product reads."""
 
-from unittest.mock import AsyncMock
+import asyncio
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -522,3 +523,117 @@ async def test_product_create_stores_the_composed_form(create_client):
 
     await product_create_data(create_client, "Cre\u0300me", "Pack", "Fridge")
     assert create_client.create_object.call_args.args[1]["name"] == "Crème"
+
+
+class _SharedCatalog:
+    """One Grocy: a created product only shows up in later reads (like the real catalog)."""
+
+    def __init__(self, instance="http://grocy-a/api"):
+        self.instance = instance
+        self.products: list[dict] = []
+        self.created: list[str] = []
+
+    async def get_objects(self, entity, query=None):
+        await asyncio.sleep(0.01)
+        return {
+            "quantity_units": [{"id": 3, "name": "Pack"}],
+            "locations": [{"id": 2, "name": "Fridge"}],
+            "product_groups": [],
+            "products": list(self.products),
+        }[entity]
+
+    async def create_object(self, entity, data):
+        await asyncio.sleep(0.01)
+        self.products.append({"id": len(self.products) + 1, "name": data["name"]})
+        self.created.append(data["name"])
+        return str(len(self.products))
+
+    async def update_userfields(self, *args):
+        return None
+
+
+async def test_concurrent_creates_of_duplicate_names_create_only_one_product():
+    from grocy_mcp.core.products import product_create_data
+
+    grocy = _SharedCatalog()
+    first, second = await asyncio.gather(
+        product_create_data(grocy, "Butter salted", "Pack", "Fridge"),
+        product_create_data(grocy, "salted Butter", "Pack", "Fridge"),
+    )
+    assert grocy.created == ["Butter salted"]
+    assert [first["created"], second["created"]] == [True, False]
+    assert second["duplicates"][0]["name"] == "Butter salted"
+
+
+async def test_force_still_creates_a_concurrent_duplicate():
+    from grocy_mcp.core.products import product_create_data
+
+    grocy = _SharedCatalog()
+    await asyncio.gather(
+        product_create_data(grocy, "Butter salted", "Pack", "Fridge"),
+        product_create_data(grocy, "salted Butter", "Pack", "Fridge", force=True),
+    )
+    assert sorted(grocy.created) == ["Butter salted", "salted Butter"]
+
+
+async def test_creates_on_different_grocy_instances_do_not_wait_for_each_other():
+    from grocy_mcp.core.products import product_create_data
+
+    a, b = _SharedCatalog("http://grocy-a/api"), _SharedCatalog("http://grocy-b/api")
+    results = await asyncio.gather(
+        product_create_data(a, "Butter salted", "Pack", "Fridge"),
+        product_create_data(b, "Butter salted", "Pack", "Fridge"),
+    )
+    assert [r["created"] for r in results] == [True, True]
+
+
+def test_the_create_lock_guards_the_lookup_not_just_the_post():
+    # negative control: without the lock the same scenario creates both products
+    import contextlib
+
+    from grocy_mcp.core import products as products_module
+
+    @contextlib.asynccontextmanager
+    async def no_lock():
+        yield
+
+    async def scenario():
+        grocy = _SharedCatalog()
+        with patch.object(products_module, "keyed_lock", lambda *a: no_lock()):
+            await asyncio.gather(
+                products_module.product_create_data(grocy, "Butter salted", "Pack", "Fridge"),
+                products_module.product_create_data(grocy, "salted Butter", "Pack", "Fridge"),
+            )
+        return grocy.created
+
+    assert len(asyncio.run(scenario())) == 2  # the race really exists without the lock
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+async def test_non_finite_userfield_values_are_rejected_before_any_request(create_client, bad):
+    from grocy_mcp.core.products import product_create_data
+
+    with pytest.raises(GrocyValidationError, match="userfield 'score' must be"):
+        await product_create_data(
+            create_client, "Thing", "Pack", "Fridge", userfields={"score": bad}
+        )
+    create_client.get_objects.assert_not_called()
+    create_client.create_object.assert_not_called()
+
+
+@pytest.mark.parametrize("bad", [[1, 2], {"a": 1}, object()])
+async def test_non_scalar_userfield_values_are_rejected_too(create_client, bad):
+    from grocy_mcp.core.products import product_create_data
+
+    with pytest.raises(GrocyValidationError, match="userfield 'x' must be"):
+        await product_create_data(create_client, "Thing", "Pack", "Fridge", userfields={"x": bad})
+    create_client.create_object.assert_not_called()
+
+
+async def test_scalar_userfield_values_are_accepted(create_client):
+    from grocy_mcp.core.products import product_create_data
+
+    values = {"text": "a", "flag": True, "count": 3, "ratio": 1.5, "empty": None}
+    result = await product_create_data(create_client, "Thing", "Pack", "Fridge", userfields=values)
+    assert result["created"] is True
+    create_client.update_userfields.assert_awaited_once_with("products", 77, values)

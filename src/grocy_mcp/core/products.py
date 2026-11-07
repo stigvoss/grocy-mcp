@@ -10,9 +10,12 @@ from typing import Any
 from urllib.parse import unquote_plus
 
 from grocy_mcp.client import GrocyClient
+from grocy_mcp.core.locks import keyed_lock, new_registry
 from grocy_mcp.exceptions import GrocyError, GrocyValidationError
 
 _USERFIELDS_PREFIX = "userfields."
+
+_create_locks = new_registry()
 
 
 def is_empty_value(value: Any) -> bool:
@@ -276,10 +279,18 @@ async def product_create_data(
         math.isfinite(min_stock_amount) and min_stock_amount >= 0
     ):
         raise GrocyValidationError("min_stock_amount must be a finite number, not negative.")
-    if userfields is not None and not (
-        isinstance(userfields, dict) and all(isinstance(k, str) and k for k in userfields)
-    ):
-        raise GrocyValidationError("userfields must map userfield names to values.")
+    if userfields is not None:
+        if not (isinstance(userfields, dict) and all(isinstance(k, str) and k for k in userfields)):
+            raise GrocyValidationError("userfields must map userfield names to values.")
+        for field, value in userfields.items():
+            if not (
+                value is None
+                or isinstance(value, (str, bool, int))
+                or (isinstance(value, float) and math.isfinite(value))
+            ):
+                raise GrocyValidationError(
+                    f"userfield '{field}' must be text, a boolean or a finite number."
+                )
 
     unit = _resolve_known(await client.get_objects("quantity_units"), stock_unit, "stock unit")
     place = _resolve_known(await client.get_objects("locations"), location, "location")
@@ -288,16 +299,6 @@ async def product_create_data(
         group = _resolve_known(
             await client.get_objects("product_groups"), product_group, "product group"
         )
-
-    if not force:
-        duplicates = find_near_duplicates(name, await client.get_objects("products"))
-        if duplicates:
-            return {
-                "created": False,
-                "reason": "A product with the same or a very similar name already exists. "
-                "Use it, or pass force=true to create anyway.",
-                "duplicates": duplicates,
-            }
 
     data: dict[str, Any] = {
         "name": name,
@@ -313,7 +314,22 @@ async def product_create_data(
         data["default_best_before_days"] = default_best_before_days
     if min_stock_amount is not None:
         data["min_stock_amount"] = min_stock_amount
-    product_id = int(await client.create_object("products", data))
+
+    # Look-up and creation must not interleave with another creation on the same Grocy: each MCP
+    # call has its own client, so the lock is shared per Grocy instance, not per client. It covers
+    # this server process only; two server processes (or the Grocy UI) can still race.
+    async with keyed_lock(_create_locks, str(getattr(client, "instance", ""))):
+        if not force:
+            duplicates = find_near_duplicates(name, await client.get_objects("products"))
+            if duplicates:
+                return {
+                    "created": False,
+                    "reason": "A product with the same or a very similar name already exists. "
+                    "Use it, or pass force=true to create anyway.",
+                    "duplicates": duplicates,
+                }
+
+        product_id = int(await client.create_object("products", data))
 
     result: dict[str, Any] = {
         "created": True,

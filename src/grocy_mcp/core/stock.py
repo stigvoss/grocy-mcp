@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import math
-import weakref
 from dataclasses import dataclass
 
 from grocy_mcp.client import GrocyClient
+from grocy_mcp.core.locks import keyed_lock, new_registry
 from grocy_mcp.core.products import is_truthy_value, userfield_contains
 from grocy_mcp.core.resolve import is_numeric_id, resolve_location, resolve_product
 from grocy_mcp.core.utils import format_amount, is_iso_date, tidy_amount, zero_rows_note
@@ -86,21 +86,7 @@ class StockOutcome:
 
 _AMOUNT_EPSILON = 1e-9  # tolerance for float residue in the stock balance
 
-# asyncio.Lock objects belong to one event loop, so the registries are keyed by the running loop.
-# Both levels are weak: a closed loop and idle locks are dropped, while a caller that is
-# waiting for or holding a lock keeps it alive for the duration of its ``async with``.
-_LockRegistry = weakref.WeakKeyDictionary[
-    asyncio.AbstractEventLoop, weakref.WeakValueDictionary[int, asyncio.Lock]
-]
-_product_locks: _LockRegistry = weakref.WeakKeyDictionary()
-
-
-def _keyed_lock(registry: _LockRegistry, key: int) -> asyncio.Lock:
-    locks = registry.setdefault(asyncio.get_running_loop(), weakref.WeakValueDictionary())
-    lock = locks.get(key)
-    if lock is None:
-        lock = locks[key] = asyncio.Lock()
-    return lock
+_product_locks = new_registry()
 
 
 def _product_lock(product_id: int) -> asyncio.Lock:
@@ -112,7 +98,7 @@ def _product_lock(product_id: int) -> asyncio.Lock:
     recipe consumption (Grocy chooses the products), the Grocy UI and other clients are not
     coordinated, which is why the entry edit also re-checks the entry just before writing.
     """
-    return _keyed_lock(_product_locks, product_id)
+    return keyed_lock(_product_locks, product_id)
 
 
 def _split_amounts(info: dict) -> tuple[float, float, float]:
