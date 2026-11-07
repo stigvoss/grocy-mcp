@@ -118,6 +118,8 @@ class WorkflowShoppingReconcileApplyAction(BaseModel):
     shopping_item_id: int
     action: Literal["remove", "set_amount"]
     new_amount: float | None = None
+    # Emitted by the preview; accepted so preview actions can be passed straight to apply.
+    previous_amount: float | None = Field(default=None, exclude=True)
 
     model_config = {"extra": "forbid"}
 
