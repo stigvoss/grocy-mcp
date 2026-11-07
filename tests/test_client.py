@@ -1,5 +1,7 @@
 """Tests for GrocyClient."""
 
+import json
+
 import httpx
 import pytest
 
@@ -223,3 +225,32 @@ async def test_url_trailing_slash_normalization(base_url, api_key):
     client = GrocyClient(base_url + "/", api_key)
     assert client._base == base_url + "/api"
     await client._client.aclose()
+
+
+async def test_transfer_stock_sends_from_and_to_location(client, mock_api):
+    route = mock_api.post("/stock/products/6/transfer").mock(
+        return_value=httpx.Response(200, json=[{"id": 28}])
+    )
+    await client.transfer_stock(6, 2.0, to_location_id=2, from_location_id=3)
+    assert json.loads(route.calls.last.request.content) == {
+        "amount": 2.0,
+        "location_id_to": 2,
+        "location_id_from": 3,
+    }
+
+
+async def test_transfer_stock_without_from_location_omits_it(client, mock_api):
+    route = mock_api.post("/stock/products/6/transfer").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    await client.transfer_stock(6, 1.0, to_location_id=2)
+    assert "location_id_from" not in json.loads(route.calls.last.request.content)
+
+
+async def test_get_stock_locations(client, mock_api):
+    mock_api.get("/stock/products/6/locations").mock(
+        return_value=httpx.Response(
+            200, json=[{"location_id": 3, "location_name": "Pantry", "amount": 3}]
+        )
+    )
+    assert (await client.get_stock_locations(6))[0]["location_name"] == "Pantry"

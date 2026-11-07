@@ -118,8 +118,20 @@ class GrocyClient:
         resp = await self._request("POST", f"/stock/products/{product_id}/consume", json=data)
         return resp.json()
 
-    async def transfer_stock(self, product_id: int, amount: float, to_location_id: int) -> Any:
-        data = {"amount": amount, "location_id_to": to_location_id}
+    async def get_stock_locations(self, product_id: int) -> list[dict]:
+        resp = await self._request("GET", f"/stock/products/{product_id}/locations")
+        return resp.json()
+
+    async def transfer_stock(
+        self,
+        product_id: int,
+        amount: float,
+        to_location_id: int,
+        from_location_id: int | None = None,
+    ) -> Any:
+        data: dict[str, Any] = {"amount": amount, "location_id_to": to_location_id}
+        if from_location_id is not None:
+            data["location_id_from"] = from_location_id
         resp = await self._request("POST", f"/stock/products/{product_id}/transfer", json=data)
         return resp.json()
 

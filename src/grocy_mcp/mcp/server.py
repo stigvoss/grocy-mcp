@@ -255,16 +255,23 @@ def create_mcp_server() -> FastMCP:
             return await stock_consume(client, product, amount)
 
     @mcp.tool()
-    async def stock_transfer_tool(product: str, amount: float, to_location: str) -> str:
+    async def stock_transfer_tool(
+        product: str, amount: float, to_location: str, from_location: str | None = None
+    ) -> str:
         """Move stock of a product to a different storage location.
+
+        Grocy needs the source location. If from_location is omitted, the single location
+        that currently holds stock is used; if the stock is spread over several locations the
+        tool returns an error listing them, and from_location must be given.
 
         Args:
             product: Product name (e.g. "Milk") or numeric product ID.
             amount: Quantity to transfer.
             to_location: Destination location name (e.g. "Fridge") or numeric location ID.
+            from_location: Optional source location name or numeric ID.
         """
         async with _get_client() as client:
-            return await stock_transfer(client, product, amount, to_location)
+            return await stock_transfer(client, product, amount, to_location, from_location)
 
     @mcp.tool()
     async def stock_inventory_tool(product: str, new_amount: float) -> str:

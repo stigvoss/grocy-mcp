@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `stock_transfer_tool` (and `grocy stock transfer --from-location`) takes an optional
+  `from_location`; without it the single location holding stock is used, and stock spread over
+  several locations returns an error asking for `from_location` (previously every call failed with
+  "A transfer from location is required")
 - `workflow_shopping_reconcile_apply_tool` accepts (and ignores) `previous_amount`, so actions from
   the preview can be passed straight through
 - `stock_journal_tool` rounds amounts and hides entries that round to zero (float residue such as
