@@ -738,3 +738,16 @@ async def test_stock_levels_location_filter_adds_amount_in_location(mock_client)
     assert [(r["name"], r["amount"], r["amount_in_location"]) for r in rows] == [
         ("Minced beef", 4.0, 3.0)
     ]
+
+
+async def test_unknown_numeric_location_is_an_error_not_an_empty_result(mock_client):
+    from grocy_mcp.core.stock import stock_by_location_data, stock_levels_data
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    client = _location_client(mock_client)
+    for call in (
+        lambda: stock_by_location_data(client, location="999"),
+        lambda: stock_levels_data(client, location="999"),
+    ):
+        with pytest.raises(GrocyValidationError, match=r"Unknown location '999'.*Fridge \(2\)"):
+            await call()

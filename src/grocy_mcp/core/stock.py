@@ -313,7 +313,7 @@ async def stock_levels_data(
     """
     in_location: dict[int, float] | None = None
     if location is not None:
-        location_id = await resolve_location(client, location)
+        location_id = await _existing_location_id(client, location)
         in_location = {}
         for row in await client.get_objects("stock_current_locations"):
             if row.get("location_id") == location_id:
@@ -376,6 +376,16 @@ async def stock_levels_data(
     return result
 
 
+async def _existing_location_id(client: GrocyClient, location: str) -> int:
+    """Resolve a location name or ID and make sure it exists (IDs are not checked by resolve)."""
+    location_id = await resolve_location(client, location)
+    known = await client.get_objects("locations")
+    if not any(loc.get("id") == location_id for loc in known):
+        available = ", ".join(f"{loc.get('name')} ({loc.get('id')})" for loc in known) or "none"
+        raise GrocyValidationError(f"Unknown location '{location}'. Available: {available}.")
+    return location_id
+
+
 async def stock_by_location_data(
     client: GrocyClient,
     location: str | None = None,
@@ -391,7 +401,7 @@ async def stock_by_location_data(
         location: Location name or numeric ID; all locations when omitted.
         freezer_only: Keep only freezer locations.
     """
-    location_id = await resolve_location(client, location) if location is not None else None
+    location_id = await _existing_location_id(client, location) if location is not None else None
     rows = await client.get_objects("stock_current_locations")
     products = {p["id"]: p for p in await client.get_objects("products")}
     units = {u["id"]: u.get("name") for u in await client.get_objects("quantity_units")}
