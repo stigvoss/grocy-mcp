@@ -78,8 +78,7 @@ _AMOUNT_EPSILON = 1e-9  # tolerance for float residue in the stock balance
 _LockRegistry = weakref.WeakKeyDictionary[
     asyncio.AbstractEventLoop, weakref.WeakValueDictionary[int, asyncio.Lock]
 ]
-_inventory_locks: _LockRegistry = weakref.WeakKeyDictionary()
-_entry_locks: _LockRegistry = weakref.WeakKeyDictionary()
+_product_locks: _LockRegistry = weakref.WeakKeyDictionary()
 
 
 def _keyed_lock(registry: _LockRegistry, key: int) -> asyncio.Lock:
@@ -90,12 +89,14 @@ def _keyed_lock(registry: _LockRegistry, key: int) -> asyncio.Lock:
     return lock
 
 
-def _inventory_lock(product_id: int) -> asyncio.Lock:
-    return _keyed_lock(_inventory_locks, product_id)
+def _product_lock(product_id: int) -> asyncio.Lock:
+    """One lock per product for every action that reads then rewrites its stock entries.
 
-
-def _entry_lock(entry_id: int) -> asyncio.Lock:
-    return _keyed_lock(_entry_locks, entry_id)
+    Inventory, consume, transfer and entry edits all read the state and write back a result
+    derived from it, so an overlapping pair could otherwise undo each other (an edit that
+    restores a unit a consume just took). It covers calls within this server process.
+    """
+    return _keyed_lock(_product_locks, product_id)
 
 
 def _split_amounts(info: dict) -> tuple[float, float, float]:
@@ -201,33 +202,37 @@ async def stock_consume(
     ``amount``, nothing is consumed and the error lists where the stock is.
     """
     product_id = await resolve_product(client, product)
-    options = dict(kwargs)
-    where = ""
-    if from_location is not None:
-        location_id = await resolve_location(client, from_location)
-        # Keep every raw balance for the check: rounding is for display only, so a request for
-        # exactly what is held is never refused and a shortfall is never rounded away.
-        held = {
-            row.get("location_id"): (row.get("location_name", "?"), float(row.get("amount") or 0))
-            for row in await client.get_stock_locations(product_id)
-        }
-        have = held.get(location_id, (from_location, 0.0))[1]
-        if have < amount - _AMOUNT_EPSILON:
-            elsewhere = (
-                ", ".join(f"{n} {format_amount(a)}" for n, a in held.values() if tidy_amount(a))
-                or "none"
-            )
-            raise GrocyValidationError(
-                f"Cannot consume {format_amount(amount)} of '{product}' from '{from_location}': "
-                f"it holds {format_amount(have)}. Stock is at: {elsewhere}."
-            )
-        options["location_id"] = location_id
-        where = f" from '{from_location}'"
-    if spoiled:
-        options["spoiled"] = True
-    await client.consume_stock(product_id, amount, **options)
-    kind = "Marked as spoiled" if spoiled else "Consumed"
-    return f"{kind} {amount} of '{product}'{where}."
+    async with _product_lock(product_id):
+        options = dict(kwargs)
+        where = ""
+        if from_location is not None:
+            location_id = await resolve_location(client, from_location)
+            # Keep every raw balance for the check: rounding is for display only, so a request for
+            # exactly what is held is never refused and a shortfall is never rounded away.
+            held = {
+                row.get("location_id"): (
+                    row.get("location_name", "?"),
+                    float(row.get("amount") or 0),
+                )
+                for row in await client.get_stock_locations(product_id)
+            }
+            have = held.get(location_id, (from_location, 0.0))[1]
+            if have < amount - _AMOUNT_EPSILON:
+                elsewhere = (
+                    ", ".join(f"{n} {format_amount(a)}" for n, a in held.values() if tidy_amount(a))
+                    or "none"
+                )
+                raise GrocyValidationError(
+                    f"Cannot consume {format_amount(amount)} of '{product}' from '{from_location}': "
+                    f"it holds {format_amount(have)}. Stock is at: {elsewhere}."
+                )
+            options["location_id"] = location_id
+            where = f" from '{from_location}'"
+        if spoiled:
+            options["spoiled"] = True
+        await client.consume_stock(product_id, amount, **options)
+        kind = "Marked as spoiled" if spoiled else "Consumed"
+        return f"{kind} {amount} of '{product}'{where}."
 
 
 async def stock_transfer(
@@ -244,24 +249,29 @@ async def stock_transfer(
     (or there is none) an error asks for ``from_location``.
     """
     product_id = await resolve_product(client, product)
-    to_location_id = await resolve_location(client, to_location)
-    if from_location is not None:
-        from_location_id = await resolve_location(client, from_location)
-    else:
-        locations = [
-            loc for loc in await client.get_stock_locations(product_id) if loc.get("amount", 0) > 0
-        ]
-        if not locations:
-            raise GrocyValidationError(f"'{product}' has no stock to transfer.")
-        if len(locations) > 1:
-            where = ", ".join(f"{loc['location_name']} ({loc['amount']:g})" for loc in locations)
-            raise GrocyValidationError(
-                f"'{product}' has stock in several locations: {where}. "
-                "Pass from_location to choose the source."
-            )
-        from_location_id = locations[0]["location_id"]
-    await client.transfer_stock(product_id, amount, to_location_id, from_location_id)
-    return f"Transferred {amount} of '{product}' to location '{to_location}'."
+    async with _product_lock(product_id):
+        to_location_id = await resolve_location(client, to_location)
+        if from_location is not None:
+            from_location_id = await resolve_location(client, from_location)
+        else:
+            locations = [
+                loc
+                for loc in await client.get_stock_locations(product_id)
+                if loc.get("amount", 0) > 0
+            ]
+            if not locations:
+                raise GrocyValidationError(f"'{product}' has no stock to transfer.")
+            if len(locations) > 1:
+                where = ", ".join(
+                    f"{loc['location_name']} ({loc['amount']:g})" for loc in locations
+                )
+                raise GrocyValidationError(
+                    f"'{product}' has stock in several locations: {where}. "
+                    "Pass from_location to choose the source."
+                )
+            from_location_id = locations[0]["location_id"]
+        await client.transfer_stock(product_id, amount, to_location_id, from_location_id)
+        return f"Transferred {amount} of '{product}' to location '{to_location}'."
 
 
 async def stock_inventory(
@@ -284,7 +294,7 @@ async def stock_inventory(
     product_id = await resolve_product(client, product)
     # Serialise the read/adjust/open sequence per product, so overlapping calls in this server
     # cannot both read the same opened count and each open the missing units.
-    async with _inventory_lock(product_id):
+    async with _product_lock(product_id):
         total, _, _ = _split_amounts(await client.get_stock_product(product_id))
         if total != new_amount:
             # Grocy rejects an inventory that equals the current amount, so skip it then
@@ -582,9 +592,10 @@ async def stock_entry_edit(
         if value is not None and not is_iso_date(value):
             raise GrocyValidationError(f"{field} must be formatted as YYYY-MM-DD.")
 
-    # Serialise the read/merge/write per entry (across clients): each PUT carries values from
-    # its own read, so overlapping edits would otherwise restore each other's old values.
-    async with _entry_lock(entry_id):
+    # Hold the product lock across read, merge and write (and re-read under it): each PUT carries
+    # values from its own read, so an overlapping edit or consume would otherwise be undone.
+    product_id = (await client.get_stock_entry(entry_id))["product_id"]
+    async with _product_lock(product_id):
         current = await client.get_stock_entry(entry_id)
         changes = {
             "amount": amount,
