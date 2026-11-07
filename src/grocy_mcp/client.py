@@ -58,6 +58,18 @@ class GrocyClient:
         raise GrocyServerError("Max retries exceeded") if last_exc is None else last_exc
 
     @staticmethod
+    def _json(resp: httpx.Response) -> Any:
+        """Decode a JSON body; an unreadable one becomes a GrocyServerError, not a raw
+        ``JSONDecodeError`` that no ``GrocyError`` handler would catch."""
+        try:
+            return resp.json()
+        except ValueError as e:
+            raise GrocyServerError(
+                f"Grocy returned an unreadable response to {resp.request.method} "
+                f"{resp.request.url.path}: {e}"
+            ) from e
+
+    @staticmethod
     def _raise_for_status(resp: httpx.Response) -> None:
         if resp.status_code < 400:
             return
@@ -79,15 +91,15 @@ class GrocyClient:
     async def get_objects(self, entity: str, query: str | None = None) -> list[dict]:
         params = {"query[]": query} if query else None
         resp = await self._request("GET", f"/objects/{entity}", params=params)
-        return resp.json()
+        return self._json(resp)
 
     async def get_object(self, entity: str, obj_id: int) -> dict:
         resp = await self._request("GET", f"/objects/{entity}/{obj_id}")
-        return resp.json()
+        return self._json(resp)
 
     async def create_object(self, entity: str, data: dict) -> int:
         resp = await self._request("POST", f"/objects/{entity}", json=data)
-        return resp.json()["created_object_id"]
+        return self._json(resp)["created_object_id"]
 
     async def update_object(self, entity: str, obj_id: int, data: dict) -> None:
         await self._request("PUT", f"/objects/{entity}/{obj_id}", json=data)
@@ -102,29 +114,29 @@ class GrocyClient:
 
     async def get_stock(self) -> list[dict]:
         resp = await self._request("GET", "/stock")
-        return resp.json()
+        return self._json(resp)
 
     async def get_stock_product(self, product_id: int) -> dict:
         resp = await self._request("GET", f"/stock/products/{product_id}")
-        return resp.json()
+        return self._json(resp)
 
     async def add_stock(self, product_id: int, amount: float, **kwargs: Any) -> Any:
         data = {"amount": amount, **kwargs}
         resp = await self._request("POST", f"/stock/products/{product_id}/add", json=data)
-        return resp.json()
+        return self._json(resp)
 
     async def consume_stock(self, product_id: int, amount: float, **kwargs: Any) -> Any:
         data = {"amount": amount, **kwargs}
         resp = await self._request("POST", f"/stock/products/{product_id}/consume", json=data)
-        return resp.json()
+        return self._json(resp)
 
     async def get_stock_entries(self, product_id: int) -> list[dict]:
         resp = await self._request("GET", f"/stock/products/{product_id}/entries")
-        return resp.json()
+        return self._json(resp)
 
     async def get_stock_entry(self, entry_id: int) -> dict:
         resp = await self._request("GET", f"/stock/entry/{entry_id}")
-        entry = resp.json()
+        entry = self._json(resp)
         if entry is None:  # Grocy answers 200 with JSON null for an unknown or consumed entry
             raise GrocyNotFoundError(
                 f"Stock entry {entry_id} not found; it may have been consumed. "
@@ -134,14 +146,14 @@ class GrocyClient:
 
     async def update_stock_entry(self, entry_id: int, data: dict) -> Any:
         resp = await self._request("PUT", f"/stock/entry/{entry_id}", json=data)
-        return resp.json()
+        return self._json(resp)
 
     async def undo_booking(self, booking_id: int) -> None:
         await self._request("POST", f"/stock/bookings/{booking_id}/undo")
 
     async def get_stock_locations(self, product_id: int) -> list[dict]:
         resp = await self._request("GET", f"/stock/products/{product_id}/locations")
-        return resp.json()
+        return self._json(resp)
 
     async def transfer_stock(
         self,
@@ -154,25 +166,25 @@ class GrocyClient:
         if from_location_id is not None:
             data["location_id_from"] = from_location_id
         resp = await self._request("POST", f"/stock/products/{product_id}/transfer", json=data)
-        return resp.json()
+        return self._json(resp)
 
     async def inventory_stock(self, product_id: int, new_amount: float) -> Any:
         data = {"new_amount": new_amount}
         resp = await self._request("POST", f"/stock/products/{product_id}/inventory", json=data)
-        return resp.json()
+        return self._json(resp)
 
     async def open_stock(self, product_id: int, amount: float = 1) -> Any:
         data = {"amount": amount}
         resp = await self._request("POST", f"/stock/products/{product_id}/open", json=data)
-        return resp.json()
+        return self._json(resp)
 
     async def get_volatile_stock(self) -> dict:
         resp = await self._request("GET", "/stock/volatile")
-        return resp.json()
+        return self._json(resp)
 
     async def get_stock_by_barcode(self, barcode: str) -> dict:
         resp = await self._request("GET", f"/stock/products/by-barcode/{barcode}")
-        return resp.json()
+        return self._json(resp)
 
     # --- Shopping Lists ---
 
@@ -212,7 +224,7 @@ class GrocyClient:
 
     async def get_recipe_fulfillment(self, recipe_id: int) -> dict:
         resp = await self._request("GET", f"/recipes/{recipe_id}/fulfillment")
-        return resp.json()
+        return self._json(resp)
 
     async def consume_recipe(self, recipe_id: int) -> None:
         await self._request("POST", f"/recipes/{recipe_id}/consume")
@@ -226,11 +238,11 @@ class GrocyClient:
 
     async def get_chores(self) -> list[dict]:
         resp = await self._request("GET", "/chores")
-        return resp.json()
+        return self._json(resp)
 
     async def get_chore(self, chore_id: int) -> dict:
         resp = await self._request("GET", f"/chores/{chore_id}")
-        return resp.json()
+        return self._json(resp)
 
     async def execute_chore(self, chore_id: int, done_by: int | None = None) -> None:
         data: dict[str, Any] = {}
@@ -247,44 +259,44 @@ class GrocyClient:
 
     async def print_chore_label(self, chore_id: int) -> dict:
         resp = await self._request("GET", f"/chores/{chore_id}/printlabel")
-        return resp.json()
+        return self._json(resp)
 
     # --- Batteries ---
 
     async def get_batteries(self) -> list[dict]:
         resp = await self._request("GET", "/batteries")
-        return resp.json()
+        return self._json(resp)
 
     async def get_battery(self, battery_id: int) -> dict:
         resp = await self._request("GET", f"/batteries/{battery_id}")
-        return resp.json()
+        return self._json(resp)
 
     async def charge_battery(self, battery_id: int, tracked_time: str | None = None) -> dict:
         data: dict[str, Any] = {}
         if tracked_time is not None:
             data["tracked_time"] = tracked_time
         resp = await self._request("POST", f"/batteries/{battery_id}/charge", json=data)
-        return resp.json()
+        return self._json(resp)
 
     async def undo_battery_charge_cycle(self, charge_cycle_id: int) -> None:
         await self._request("POST", f"/batteries/charge-cycles/{charge_cycle_id}/undo")
 
     async def print_battery_label(self, battery_id: int) -> dict:
         resp = await self._request("GET", f"/batteries/{battery_id}/printlabel")
-        return resp.json()
+        return self._json(resp)
 
     # --- Tasks ---
 
     async def get_tasks(self) -> list[dict]:
         resp = await self._request("GET", "/tasks")
-        return resp.json()
+        return self._json(resp)
 
     async def complete_task(self, task_id: int, done_time: str | None = None) -> dict:
         data: dict[str, Any] = {}
         if done_time is not None:
             data["done_time"] = done_time
         resp = await self._request("POST", f"/tasks/{task_id}/complete", json=data)
-        return resp.json()
+        return self._json(resp)
 
     async def undo_task(self, task_id: int) -> None:
         await self._request("POST", f"/tasks/{task_id}/undo")
@@ -297,7 +309,7 @@ class GrocyClient:
 
     async def get_calendar_sharing_link(self) -> dict:
         resp = await self._request("GET", "/calendar/ical/sharing-link")
-        return resp.json()
+        return self._json(resp)
 
     # --- Files ---
 
@@ -335,22 +347,22 @@ class GrocyClient:
 
     async def print_stock_entry_label(self, entry_id: int) -> dict:
         resp = await self._request("GET", f"/stock/entry/{entry_id}/printlabel")
-        return resp.json()
+        return self._json(resp)
 
     async def print_stock_product_label(self, product_id: int) -> dict:
         resp = await self._request("GET", f"/stock/products/{product_id}/printlabel")
-        return resp.json()
+        return self._json(resp)
 
     async def print_recipe_label(self, recipe_id: int) -> dict:
         resp = await self._request("GET", f"/recipes/{recipe_id}/printlabel")
-        return resp.json()
+        return self._json(resp)
 
     async def print_shopping_list_thermal(self) -> dict:
         resp = await self._request("GET", "/print/shoppinglist/thermal")
-        return resp.json()
+        return self._json(resp)
 
     # --- System ---
 
     async def get_system_info(self) -> dict:
         resp = await self._request("GET", "/system/info")
-        return resp.json()
+        return self._json(resp)
