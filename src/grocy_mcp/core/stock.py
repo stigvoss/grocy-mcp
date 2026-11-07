@@ -188,11 +188,45 @@ async def stock_transfer(
     return f"Transferred {amount} of '{product}' to location '{to_location}'."
 
 
-async def stock_inventory(client: GrocyClient, product: str, new_amount: float) -> str:
-    """Set the stock amount for a product via inventory."""
+async def stock_inventory(
+    client: GrocyClient,
+    product: str,
+    new_amount: float,
+    opened_amount: float | None = None,
+) -> str:
+    """Set the stock amount for a product via inventory and report the opened/unopened split.
+
+    Grocy removes opened units first when the amount goes down. With ``opened_amount`` the
+    missing units are opened afterwards so the result matches the physical count. Grocy cannot
+    un-open units, so if more units are open than asked for, the result says so.
+    """
+    if opened_amount is not None and not (
+        math.isfinite(opened_amount) and 0 <= opened_amount <= new_amount
+    ):
+        raise GrocyValidationError("opened_amount must be between 0 and new_amount.")
+
     product_id = await resolve_product(client, product)
-    await client.inventory_stock(product_id, new_amount)
-    return f"Inventory updated: '{product}' set to {new_amount}."
+    total, _, _ = _split_amounts(await client.get_stock_product(product_id))
+    if total != new_amount:
+        # Grocy rejects an inventory that equals the current amount, so skip it in that case
+        await client.inventory_stock(product_id, new_amount)
+    total, opened, unopened = _split_amounts(await client.get_stock_product(product_id))
+
+    note = ""
+    if opened_amount is not None:
+        if opened < opened_amount:
+            await client.open_stock(product_id, opened_amount - opened)
+            opened, unopened = opened_amount, max(total - opened_amount, 0.0)
+        elif opened > opened_amount:
+            note = (
+                f" {_fmt(opened)} are open but {_fmt(opened_amount)} were requested; "
+                "Grocy cannot un-open units."
+            )
+
+    return (
+        f"Inventory updated: '{product}' set to {new_amount} "
+        f"(unopened {_fmt(unopened)}, opened {_fmt(opened)}).{note}"
+    )
 
 
 async def stock_open(client: GrocyClient, product: str, amount: float = 1.0) -> str:
