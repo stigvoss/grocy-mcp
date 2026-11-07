@@ -587,3 +587,44 @@ async def test_open_with_residue_in_the_unopened_amount_is_allowed():
         result = await workflow_stock_apply_data(client, [{"action": "open", "product": "Milk"}])
     client.open_stock.assert_awaited_once()
     assert result["results"][0]["ok"] is True
+
+
+async def test_workflow_stock_apply_non_ascii_digit_product_is_a_per_item_failure():
+    client = AsyncMock()
+    client.get_objects.return_value = [{"id": 1, "name": "Milk"}]
+    client.get_stock_product.return_value = {
+        "product": {"name": "Milk"},
+        "stock_amount": 2,
+        "stock_amount_opened": 0,
+    }
+    result = await workflow_stock_apply_data(
+        client,
+        [
+            {"action": "open", "product": "1"},
+            {"action": "open", "product": "²"},
+            {"action": "open", "product": "Milk"},
+        ],
+    )
+    assert [r["ok"] for r in result["results"]] == [True, False, True]
+    assert (
+        "No products found" in result["results"][1]["error"] or "²" in result["results"][1]["error"]
+    )
+    assert result["applied_count"] == 2 and client.open_stock.await_count == 2
+
+
+async def test_workflow_stock_apply_unexpected_errors_are_isolated_to_their_item():
+    client = AsyncMock()
+    with patch(
+        "grocy_mcp.core.stock.stock_consume",
+        AsyncMock(side_effect=[RuntimeError("boom"), "Consumed"]),
+    ):
+        result = await workflow_stock_apply_data(
+            client,
+            [
+                {"action": "consume", "product": "A", "amount": 1},
+                {"action": "consume", "product": "B", "amount": 1},
+            ],
+        )
+    assert [r["ok"] for r in result["results"]] == [False, True]
+    assert result["results"][0]["error"] == "Unexpected error: RuntimeError: boom"
+    assert result["applied_count"] == 1 and result["failed_count"] == 1
