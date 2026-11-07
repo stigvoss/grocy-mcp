@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Correcting stock**: `stock_entries_tool` lists a product's entries with entry IDs,
+  `stock_entry_edit_tool` changes amount, dates, price, location or opened state of one entry, and
+  `stock_undo_tool` reverses a booking (the ID shown in `stock_journal_tool`)
 - `stock_consume_tool` (and `grocy stock consume`) takes optional `from_location` and `spoiled`;
   consuming from a location that holds too little consumes nothing and lists where the stock is
 - **Stock by location**: `stock_by_location_tool` lists what is stored where (product name, amount,

@@ -70,22 +70,32 @@ async def stock_expiring(client: GrocyClient) -> str:
     return "\n".join(lines)
 
 
-# asyncio.Lock objects belong to one event loop, so the registry is keyed by the running loop.
-# Both levels are weak: a closed loop and idle locks are dropped, while a caller that is
-# waiting for or holding a lock keeps it alive for the duration of its ``async with``.
 _AMOUNT_EPSILON = 1e-9  # tolerance for float residue in the stock balance
 
-_inventory_locks: weakref.WeakKeyDictionary[
+# asyncio.Lock objects belong to one event loop, so the registries are keyed by the running loop.
+# Both levels are weak: a closed loop and idle locks are dropped, while a caller that is
+# waiting for or holding a lock keeps it alive for the duration of its ``async with``.
+_LockRegistry = weakref.WeakKeyDictionary[
     asyncio.AbstractEventLoop, weakref.WeakValueDictionary[int, asyncio.Lock]
-] = weakref.WeakKeyDictionary()
+]
+_inventory_locks: _LockRegistry = weakref.WeakKeyDictionary()
+_entry_locks: _LockRegistry = weakref.WeakKeyDictionary()
+
+
+def _keyed_lock(registry: _LockRegistry, key: int) -> asyncio.Lock:
+    locks = registry.setdefault(asyncio.get_running_loop(), weakref.WeakValueDictionary())
+    lock = locks.get(key)
+    if lock is None:
+        lock = locks[key] = asyncio.Lock()
+    return lock
 
 
 def _inventory_lock(product_id: int) -> asyncio.Lock:
-    locks = _inventory_locks.setdefault(asyncio.get_running_loop(), weakref.WeakValueDictionary())
-    lock = locks.get(product_id)
-    if lock is None:
-        lock = locks[product_id] = asyncio.Lock()
-    return lock
+    return _keyed_lock(_inventory_locks, product_id)
+
+
+def _entry_lock(entry_id: int) -> asyncio.Lock:
+    return _keyed_lock(_entry_locks, entry_id)
 
 
 def _split_amounts(info: dict) -> tuple[float, float, float]:
@@ -497,3 +507,116 @@ async def stock_barcode_lookup(client: GrocyClient, barcode: str) -> str:
     name = product.get("name", f"Barcode {barcode}")
     amount = info.get("stock_amount", 0)
     return f"Barcode {barcode}: {name} — {amount} in stock."
+
+
+async def stock_entries_data(
+    client: GrocyClient, product: str, location: str | None = None
+) -> list[dict]:
+    """Return a product's individual stock entries, with the entry IDs the edit tool needs."""
+    product_id = await resolve_product(client, product)
+    location_id = await resolve_location(client, location) if location is not None else None
+    names = {loc["id"]: loc.get("name") for loc in await client.get_objects("locations")}
+    result = []
+    for entry in await client.get_stock_entries(product_id):
+        if location_id is not None and entry.get("location_id") != location_id:
+            continue
+        result.append(
+            {
+                "entry_id": entry.get("id"),
+                "amount": tidy_amount(entry.get("amount")),
+                "opened": bool(int(entry.get("open") or 0)),
+                "best_before_date": entry.get("best_before_date"),
+                "purchased_date": entry.get("purchased_date"),
+                "price": entry.get("price"),
+                "location": names.get(entry.get("location_id")),
+                "shopping_location_id": entry.get("shopping_location_id"),
+            }
+        )
+    return result
+
+
+async def stock_entry_edit(
+    client: GrocyClient,
+    entry_id: int,
+    amount: float | None = None,
+    best_before_date: str | None = None,
+    price: float | None = None,
+    purchased_date: str | None = None,
+    location: str | None = None,
+    open: bool | None = None,
+) -> str:
+    """Correct one stock entry (this rewrites history; confirm with the user first).
+
+    Only the fields given are changed. Grocy requires the full entry, so the current values are
+    read first and sent back with the changes applied.
+    """
+    if (
+        all(v is None for v in (amount, best_before_date, price, purchased_date, location, open))
+        or entry_id is None
+    ):
+        raise GrocyValidationError("Give at least one field to change.")
+    if amount is not None and not (math.isfinite(amount) and amount > 0):
+        raise GrocyValidationError(
+            "amount must be greater than 0 (use stock_consume_tool to remove stock)."
+        )
+    if price is not None and not (math.isfinite(price) and price >= 0):
+        raise GrocyValidationError("price must be a finite number that is not negative.")
+    for field, value in (
+        ("best_before_date", best_before_date),
+        ("purchased_date", purchased_date),
+    ):
+        if value is not None and not is_iso_date(value):
+            raise GrocyValidationError(f"{field} must be formatted as YYYY-MM-DD.")
+
+    # Serialise the read/merge/write per entry (across clients): each PUT carries values from
+    # its own read, so overlapping edits would otherwise restore each other's old values.
+    async with _entry_lock(entry_id):
+        current = await client.get_stock_entry(entry_id)
+        changes = {
+            "amount": amount,
+            "best_before_date": best_before_date,
+            "price": price,
+            "purchased_date": purchased_date,
+            "open": None if open is None else int(open),
+        }
+        if location is not None:
+            changes["location_id"] = await resolve_location(client, location)
+        changes = {k: v for k, v in changes.items() if v is not None}
+
+        # Grocy writes back every field it is sent and clears the ones it is not, so everything
+        # the entry has (including its note) is sent again.
+        keep = (
+            "amount",
+            "best_before_date",
+            "purchased_date",
+            "price",
+            "location_id",
+            "open",
+            "note",
+            "shopping_location_id",
+        )
+        payload = {k: current[k] for k in keep if current.get(k) is not None}
+        payload.update(changes)
+        await client.update_stock_entry(entry_id, payload)
+
+    def show(value: object) -> str:
+        return format_amount(value) if isinstance(value, float) else str(value)
+
+    diffs = [
+        f"{k} {show(current.get(k))} -> {show(v)}"
+        for k, v in changes.items()
+        if current.get(k) != v
+    ]
+    detail = "; ".join(diffs) if diffs else "no change"
+    return f"Updated stock entry {entry_id}: {detail}."
+
+
+async def stock_undo(client: GrocyClient, booking_id: int) -> str:
+    """Reverse a stock booking (a stock journal entry). This rewrites history."""
+    try:
+        await client.undo_booking(booking_id)
+    except GrocyValidationError as e:
+        raise GrocyValidationError(
+            f"Could not undo booking {booking_id}: it may not exist or may already be undone ({e})."
+        ) from e
+    return f"Undid booking {booking_id}."
