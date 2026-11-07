@@ -86,3 +86,53 @@ async def test_stock_journal_filtered_no_results():
     with patch("grocy_mcp.core.stock_journal.resolve_product", return_value=1):
         result = await stock_journal(client, product="Milk")
     assert "No stock journal entries found for 'Milk'." in result
+
+
+def _entry(entry_id, amount, txn="consume"):
+    return {
+        "id": entry_id,
+        "product_id": 1,
+        "amount": amount,
+        "transaction_type": txn,
+        "row_created_timestamp": f"2026-11-07 08:16:{entry_id:02d}",
+    }
+
+
+async def test_stock_journal_hides_float_noise_entries():
+    client = AsyncMock()
+    client.get_objects.side_effect = [
+        [
+            _entry(1, 2, "purchase"),
+            _entry(2, 2.2204460492503e-16, "product-opened"),
+            _entry(3, -2.2204460492503e-16, "transfer_from"),
+        ],
+        [{"id": 1, "name": "Kitchen paper towel"}],
+    ]
+    result = await stock_journal(client)
+    assert "purchase 2" in result
+    assert "e-16" not in result
+    assert "product-opened" not in result
+    assert "2 zero-amount entries hidden" in result
+
+
+async def test_stock_journal_rounds_amounts():
+    client = AsyncMock()
+    client.get_objects.side_effect = [
+        [_entry(1, 0.30000000000000004, "purchase"), _entry(2, -4, "consume")],
+        [{"id": 1, "name": "Milk"}],
+    ]
+    result = await stock_journal(client)
+    assert "purchase 0.3 " in result
+    assert "consume -4 " in result
+    assert "hidden" not in result
+
+
+async def test_stock_journal_keeps_large_and_precise_amounts():
+    client = AsyncMock()
+    client.get_objects.side_effect = [
+        [_entry(1, 12.345678, "purchase"), _entry(2, 1234567, "purchase")],
+        [{"id": 1, "name": "Flour"}],
+    ]
+    result = await stock_journal(client)
+    assert "purchase 12.345678 " in result
+    assert "purchase 1234567 " in result
