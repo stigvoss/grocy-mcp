@@ -152,3 +152,45 @@ async def test_workflow_shopping_reconcile_apply_data():
     client.remove_shopping_list_item.assert_awaited_once_with(3)
     client.update_shopping_list_item.assert_awaited_once_with(4, {"amount": 2.0})
     assert result["applied_count"] == 2
+
+
+async def test_workflow_stock_intake_apply_passes_price_and_options():
+    client = AsyncMock()
+
+    result = await workflow_stock_intake_apply_data(
+        client,
+        [
+            {"product_id": 39, "amount": 1, "price": 15.5},
+            {
+                "product_id": 40,
+                "amount": 2,
+                "price": 0,
+                "best_before_date": "2027-01-31",
+                "location_id": 3,
+            },
+            {"product_id": 41, "amount": 1},
+        ],
+    )
+
+    assert client.add_stock.await_args_list[0].args == (39, 1.0)
+    assert client.add_stock.await_args_list[0].kwargs == {"price": 15.5}
+    assert client.add_stock.await_args_list[1].kwargs == {
+        "price": 0.0,
+        "best_before_date": "2027-01-31",
+        "location_id": 3,
+    }
+    assert client.add_stock.await_args_list[2].kwargs == {}
+    assert result["applied_items"][0]["price"] == 15.5
+
+
+async def test_workflow_stock_intake_apply_rejects_negative_price_and_bad_date():
+    client = AsyncMock()
+    with pytest.raises(Exception, match="price must not be negative"):
+        await workflow_stock_intake_apply_data(
+            client, [{"product_id": 1, "amount": 1, "price": -2}]
+        )
+    with pytest.raises(Exception, match="YYYY-MM-DD"):
+        await workflow_stock_intake_apply_data(
+            client, [{"product_id": 1, "amount": 1, "best_before_date": "tomorrow"}]
+        )
+    client.add_stock.assert_not_called()

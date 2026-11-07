@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -69,6 +70,9 @@ class WorkflowApplyItem(BaseModel):
     product_id: int
     amount: float
     note: str | None = None
+    price: float | None = None
+    best_before_date: str | None = None
+    location_id: int | None = None
 
     model_config = {"extra": "forbid"}
 
@@ -83,6 +87,24 @@ class WorkflowApplyItem(BaseModel):
     @classmethod
     def normalize_note(cls, value: str | None) -> str | None:
         return _normalize_optional_text(value)
+
+    @field_validator("price")
+    @classmethod
+    def validate_price(cls, value: float | None) -> float | None:
+        if value is not None and value < 0:
+            raise ValueError("price must not be negative")
+        return value
+
+    @field_validator("best_before_date")
+    @classmethod
+    def validate_best_before_date(cls, value: str | None) -> str | None:
+        value = _normalize_optional_text(value)
+        if value is not None:
+            try:
+                date.fromisoformat(value)
+            except ValueError as e:
+                raise ValueError("best_before_date must be formatted as YYYY-MM-DD") from e
+        return value
 
 
 class WorkflowShoppingReconcilePreviewAction(BaseModel):
