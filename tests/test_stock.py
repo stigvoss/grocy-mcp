@@ -874,12 +874,24 @@ async def test_stock_undo_calls_client_and_explains_failure(mock_client):
     from grocy_mcp.core.stock import stock_undo
     from grocy_mcp.exceptions import GrocyValidationError
 
+    mock_client.get_object.return_value = {"id": 17, "product_id": 1}
     assert "Undid booking 17" in await stock_undo(mock_client, 17)
+    mock_client.get_object.assert_called_once_with("stock_log", 17)
     mock_client.undo_booking.assert_called_once_with(17)
 
     mock_client.undo_booking.side_effect = GrocyValidationError("Validation error: gone")
     with pytest.raises(GrocyValidationError, match="may already be undone"):
         await stock_undo(mock_client, 17)
+
+
+async def test_stock_undo_of_an_unknown_booking_is_a_clear_error(mock_client):
+    from grocy_mcp.core.stock import stock_undo
+    from grocy_mcp.exceptions import GrocyNotFoundError, GrocyValidationError
+
+    mock_client.get_object.side_effect = GrocyNotFoundError("Not found: x")
+    with pytest.raises(GrocyValidationError, match="does not exist"):
+        await stock_undo(mock_client, 999)
+    mock_client.undo_booking.assert_not_called()
 
 
 async def test_stock_entries_lists_ids_and_location_names(mock_client):
@@ -1120,3 +1132,26 @@ async def test_edit_started_first_still_sees_the_consume_that_ran_before_its_wri
             stock_entry_edit(client, 24, price=9.5),
         )
     assert client.entry["amount"] == 1 and client.entry["price"] == 9.5
+
+
+class _FakeUndoClient(_FakeProductClient):
+    """A consume booking that an overlapping undo and price-only edit both touch."""
+
+    async def get_object(self, entity, obj_id):
+        await asyncio.sleep(0)
+        return {"id": obj_id, "product_id": 1}
+
+    async def undo_booking(self, booking_id):
+        await asyncio.sleep(0)
+        self.entry["amount"] += 1  # reverses a consume of one unit
+
+
+async def test_undo_overlapping_an_edit_is_not_overwritten():
+    from grocy_mcp.core.stock import stock_entry_edit, stock_undo
+
+    client = _FakeUndoClient(amount=1)
+    await asyncio.gather(
+        stock_entry_edit(client, 24, price=9.5),
+        stock_undo(client, 17),
+    )
+    assert client.entry["amount"] == 2 and client.entry["price"] == 9.5
