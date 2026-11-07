@@ -10,7 +10,7 @@ from grocy_mcp.client import GrocyClient
 from grocy_mcp.core.products import is_truthy_value
 from grocy_mcp.core.resolve import resolve_location, resolve_product
 from grocy_mcp.core.utils import format_amount, is_iso_date, tidy_amount, zero_rows_note
-from grocy_mcp.exceptions import GrocyValidationError
+from grocy_mcp.exceptions import GrocyNotFoundError, GrocyValidationError
 
 
 async def stock_overview(client: GrocyClient) -> str:
@@ -623,11 +623,23 @@ async def stock_entry_edit(
 
 
 async def stock_undo(client: GrocyClient, booking_id: int) -> str:
-    """Reverse a stock booking (a stock journal entry). This rewrites history."""
+    """Reverse a stock booking (a stock journal entry). This rewrites history.
+
+    The booking's product is looked up first so the undo runs under the same per-product lock as
+    consume, transfer, inventory, opening and entry edits; otherwise it could race with them.
+    """
     try:
-        await client.undo_booking(booking_id)
-    except GrocyValidationError as e:
+        booking = await client.get_object("stock_log", booking_id)
+    except GrocyNotFoundError as e:
         raise GrocyValidationError(
-            f"Could not undo booking {booking_id}: it may not exist or may already be undone ({e})."
+            f"Could not undo booking {booking_id}: it does not exist. "
+            "Booking IDs are the numbers in brackets in stock_journal_tool."
         ) from e
+    async with _product_lock(booking["product_id"]):
+        try:
+            await client.undo_booking(booking_id)
+        except GrocyValidationError as e:
+            raise GrocyValidationError(
+                f"Could not undo booking {booking_id}: it may already be undone ({e})."
+            ) from e
     return f"Undid booking {booking_id}."
