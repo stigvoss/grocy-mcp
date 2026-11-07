@@ -242,3 +242,19 @@ async def test_workflow_stock_intake_apply_rejects_non_finite_price_before_any_w
             [{"product_id": 1, "amount": 1}, {"product_id": 2, "amount": 1, "price": float("nan")}],
         )
     client.add_stock.assert_not_called()
+
+
+async def test_workflow_stock_intake_apply_passes_purchased_date_and_store():
+    client = AsyncMock()
+    await workflow_stock_intake_apply_data(
+        client,
+        [{"product_id": 5, "amount": 1, "purchased_date": "2026-11-07", "shopping_location_id": 2}],
+    )
+    assert client.add_stock.await_args.kwargs == {
+        "purchased_date": "2026-11-07",
+        "shopping_location_id": 2,
+    }
+    with pytest.raises(Exception, match="purchased_date must be formatted"):
+        await workflow_stock_intake_apply_data(
+            client, [{"product_id": 5, "amount": 1, "purchased_date": "7/11/2026"}]
+        )

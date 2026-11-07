@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Price and details when adding stock**: `stock_add_tool` (and `grocy stock add`) and the items of
   `workflow_stock_intake_apply_tool` accept optional `price` (per stock unit), `best_before_date`
   (YYYY-MM-DD) and `location_id`
+- `stock_add_tool` / `grocy stock add` and the intake apply items also accept `purchased_date` and
+  `shopping_location_id`; `stock_add_tool` accepts a location by name or ID via `location`
 - **Bulk product read**: `products_list_tool` returns every product with its `userfields` in one
   request, with optional `fields` (e.g. `userfields.bilkatogo_ids`) and `userfields_set` filters
 - **Stock levels**: `stock_levels_tool` lists all active products including those at 0 stock, with
