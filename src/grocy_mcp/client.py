@@ -58,12 +58,19 @@ class GrocyClient:
         raise GrocyServerError("Max retries exceeded") if last_exc is None else last_exc
 
     @staticmethod
-    def _json(resp: httpx.Response) -> Any:
+    def _json(resp: httpx.Response, *, required: bool = True) -> Any:
         """Decode a JSON body; an unreadable one becomes a GrocyServerError, not a raw
-        ``JSONDecodeError`` that no ``GrocyError`` handler would catch."""
+        ``JSONDecodeError`` that no ``GrocyError`` handler would catch.
+
+        With ``required=False`` (writes whose body nobody reads) an unreadable body returns
+        ``None`` instead: Grocy already acknowledged the write with a 2xx status, and reporting
+        a failure would invite a retry that repeats an action that was in fact applied.
+        """
         try:
             return resp.json()
         except ValueError as e:
+            if not required:
+                return None
             raise GrocyServerError(
                 f"Grocy returned an unreadable response to {resp.request.method} "
                 f"{resp.request.url.path}: {e}"
@@ -123,12 +130,12 @@ class GrocyClient:
     async def add_stock(self, product_id: int, amount: float, **kwargs: Any) -> Any:
         data = {"amount": amount, **kwargs}
         resp = await self._request("POST", f"/stock/products/{product_id}/add", json=data)
-        return self._json(resp)
+        return self._json(resp, required=False)
 
     async def consume_stock(self, product_id: int, amount: float, **kwargs: Any) -> Any:
         data = {"amount": amount, **kwargs}
         resp = await self._request("POST", f"/stock/products/{product_id}/consume", json=data)
-        return self._json(resp)
+        return self._json(resp, required=False)
 
     async def get_stock_entries(self, product_id: int) -> list[dict]:
         resp = await self._request("GET", f"/stock/products/{product_id}/entries")
@@ -146,7 +153,7 @@ class GrocyClient:
 
     async def update_stock_entry(self, entry_id: int, data: dict) -> Any:
         resp = await self._request("PUT", f"/stock/entry/{entry_id}", json=data)
-        return self._json(resp)
+        return self._json(resp, required=False)
 
     async def undo_booking(self, booking_id: int) -> None:
         await self._request("POST", f"/stock/bookings/{booking_id}/undo")
@@ -166,17 +173,17 @@ class GrocyClient:
         if from_location_id is not None:
             data["location_id_from"] = from_location_id
         resp = await self._request("POST", f"/stock/products/{product_id}/transfer", json=data)
-        return self._json(resp)
+        return self._json(resp, required=False)
 
     async def inventory_stock(self, product_id: int, new_amount: float) -> Any:
         data = {"new_amount": new_amount}
         resp = await self._request("POST", f"/stock/products/{product_id}/inventory", json=data)
-        return self._json(resp)
+        return self._json(resp, required=False)
 
     async def open_stock(self, product_id: int, amount: float = 1) -> Any:
         data = {"amount": amount}
         resp = await self._request("POST", f"/stock/products/{product_id}/open", json=data)
-        return self._json(resp)
+        return self._json(resp, required=False)
 
     async def get_volatile_stock(self) -> dict:
         resp = await self._request("GET", "/stock/volatile")
