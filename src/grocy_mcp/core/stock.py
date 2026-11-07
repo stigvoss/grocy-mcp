@@ -195,18 +195,18 @@ async def stock_consume(
     where = ""
     if from_location is not None:
         location_id = await resolve_location(client, from_location)
-        held = {}
-        for row in await client.get_stock_locations(product_id):
-            # Compare the real balance; rounding is for display only, so a request for exactly
-            # what is held is never refused and a shortfall is never rounded away.
-            if tidy_amount(row.get("amount")):
-                held[row.get("location_id")] = (
-                    row.get("location_name", "?"),
-                    float(row.get("amount")),
-                )
+        # Keep every raw balance for the check: rounding is for display only, so a request for
+        # exactly what is held is never refused and a shortfall is never rounded away.
+        held = {
+            row.get("location_id"): (row.get("location_name", "?"), float(row.get("amount") or 0))
+            for row in await client.get_stock_locations(product_id)
+        }
         have = held.get(location_id, (from_location, 0.0))[1]
         if have < amount - _AMOUNT_EPSILON:
-            elsewhere = ", ".join(f"{n} {format_amount(a)}" for n, a in held.values()) or "none"
+            elsewhere = (
+                ", ".join(f"{n} {format_amount(a)}" for n, a in held.values() if tidy_amount(a))
+                or "none"
+            )
             raise GrocyValidationError(
                 f"Cannot consume {format_amount(amount)} of '{product}' from '{from_location}': "
                 f"it holds {format_amount(have)}. Stock is at: {elsewhere}."
