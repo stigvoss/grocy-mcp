@@ -811,7 +811,8 @@ def create_mcp_server() -> FastMCP:
     async def stock_usage_stats_tool(product: str, days: int = 90) -> dict:
         """Summarise a product's usage over a window, so you need not read raw journal lines.
 
-        Returns purchases (count, total amount, dates, total spent, average unit price),
+        Returns purchases (count, total amount, dates, total spent and average unit price over the
+        purchases that have a price, with unpriced_purchases and total_spent_is_complete),
         consumes (count, amount, plus spoiled kept apart), opens, average daily use, the median
         and last gap in days between consume/open/purchase events, days since the last
         movement and the current stock. Undone bookings and float-noise rows are ignored.

@@ -37,7 +37,9 @@ async def stock_usage_stats_data(
     """Summarise a product's purchases, consumption and opens over the last ``days`` days.
 
     Built from the stock journal: undone bookings and rows that round to zero (float residue) are
-    ignored. Dates are the journal's creation timestamps, which Grocy writes in its own local
+    ignored. ``total_spent`` and ``average_unit_price`` count only purchases that have a price;
+    ``unpriced_purchases`` says how many were left out and ``total_spent_is_complete`` whether
+    any were. Dates are the journal's creation timestamps, which Grocy writes in its own local
     time and which are read here as UTC, so they can be off by the server's UTC offset. ``avg_daily_use`` is the amount
     consumed (spoiled units excluded) divided by ``days``.
     """
@@ -79,7 +81,11 @@ async def stock_usage_stats_data(
             "count": len(purchases),
             "total_amount": round(sum(abs(a) for _, _, a, _ in purchases), 6),
             "dates": [w.date().isoformat() for w, *_ in purchases],
+            # covers only purchases that have a price; check unpriced_purchases before treating
+            # it as the whole spend
             "total_spent": round(sum(a * p for a, p in prices), 2) if prices else None,
+            "unpriced_purchases": len(purchases) - len(prices),
+            "total_spent_is_complete": len(prices) == len(purchases),
             "average_unit_price": (
                 round(sum(a * p for a, p in prices) / sum(a for a, _ in prices), 4)
                 if prices
