@@ -8,7 +8,7 @@ from grocy_mcp.client import GrocyClient
 from grocy_mcp.exceptions import GrocyValidationError
 
 _NOT_NULL = re.compile(r"NOT NULL constraint failed: (\w+)\.(\w+)")
-_UNIQUE = re.compile(r"UNIQUE constraint failed: (\w+)\.(\w+)")
+_UNIQUE = re.compile(r"UNIQUE constraint failed: ((?:\w+\.\w+(?:, )?)+)")
 _FOREIGN_KEY = "FOREIGN KEY constraint failed"
 
 
@@ -19,7 +19,7 @@ def _friendly_constraint_error(entity: str, action: str, error: GrocyValidationE
         column = match.group(2)
         hint = (
             " Use locations_list_tool or catalog_list_tool to find a valid ID."
-            if column.endswith("_id")
+            if column.endswith("_id") or column.startswith("qu_id_")
             else ""
         )
         return GrocyValidationError(
@@ -27,9 +27,14 @@ def _friendly_constraint_error(entity: str, action: str, error: GrocyValidationE
             f"and retry; Grocy reports one missing field at a time.{hint}"
         )
     if match := _UNIQUE.search(text):
+        columns = [part.split(".")[-1] for part in match.group(1).split(", ")]
+        if len(columns) == 1:
+            what = f"the same '{columns[0]}'"
+        else:
+            what = "the same combination of " + ", ".join(f"'{c}'" for c in columns)
         return GrocyValidationError(
-            f"Cannot {action} {entity}: a record with the same '{match.group(2)}' already "
-            "exists. Use a different value, or update the existing record."
+            f"Cannot {action} {entity}: a record with {what} already exists. "
+            "Use different values, or update the existing record."
         )
     if _FOREIGN_KEY in text:
         return GrocyValidationError(

@@ -152,3 +152,20 @@ async def test_entity_create_other_validation_errors_pass_through(mock_client):
     mock_client.create_object.side_effect = GrocyValidationError("Validation error: other")
     with pytest.raises(GrocyValidationError, match="other"):
         await entity_manage(mock_client, "products", "create", data={"name": "X"})
+
+
+async def test_entity_create_qu_id_field_gets_lookup_hint(mock_client):
+    mock_client.create_object.side_effect = GrocyValidationError(
+        "NOT NULL constraint failed: products.qu_id_stock"
+    )
+    with pytest.raises(GrocyValidationError, match="qu_id_stock.*find a valid ID"):
+        await entity_manage(mock_client, "products", "create", data={"name": "X"})
+
+
+async def test_entity_create_composite_unique_error_names_all_columns(mock_client):
+    mock_client.create_object.side_effect = GrocyValidationError(
+        "UNIQUE constraint failed: product_barcodes.barcode, product_barcodes.shopping_location_id"
+    )
+    with pytest.raises(GrocyValidationError) as exc:
+        await entity_manage(mock_client, "product_barcodes", "create", data={})
+    assert "combination of 'barcode', 'shopping_location_id'" in str(exc.value)
