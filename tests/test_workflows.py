@@ -1,6 +1,6 @@
 """Tests for workflow-oriented preview/apply helpers."""
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -8,6 +8,7 @@ from grocy_mcp.core.workflows import (
     workflow_match_products_preview_data,
     workflow_shopping_reconcile_apply_data,
     workflow_shopping_reconcile_preview_data,
+    workflow_stock_apply_data,
     workflow_stock_intake_apply_data,
 )
 from grocy_mcp.exceptions import GrocyValidationError
@@ -258,3 +259,110 @@ async def test_workflow_stock_intake_apply_passes_purchased_date_and_store():
         await workflow_stock_intake_apply_data(
             client, [{"product_id": 5, "amount": 1, "purchased_date": "7/11/2026"}]
         )
+
+
+async def test_workflow_stock_apply_runs_every_action_and_reports_each():
+    client = AsyncMock()
+    with (
+        patch("grocy_mcp.core.stock.stock_consume", AsyncMock(return_value="Consumed")) as consume,
+        patch("grocy_mcp.core.stock.stock_open", AsyncMock(return_value="Opened")) as open_,
+        patch("grocy_mcp.core.stock.stock_inventory", AsyncMock(return_value="Inv")) as inv,
+        patch("grocy_mcp.core.stock.stock_transfer", AsyncMock(return_value="Moved")) as transfer,
+    ):
+        result = await workflow_stock_apply_data(
+            client,
+            [
+                {"action": "consume", "product": "Milk", "amount": 1, "from_location": "Freezer"},
+                {"action": "open", "product": 7},
+                {"action": "inventory", "product": "Eggs", "new_amount": 2, "opened_amount": 1},
+                {"action": "transfer", "product": "Beef", "amount": 1, "to_location": "Freezer"},
+            ],
+        )
+    consume.assert_awaited_once_with(client, "Milk", 1.0, "Freezer", False)
+    open_.assert_awaited_once_with(client, "7", 1.0)
+    inv.assert_awaited_once_with(client, "Eggs", 2.0, 1.0)
+    transfer.assert_awaited_once_with(client, "Beef", 1.0, "Freezer", None)
+    assert result["applied_count"] == 4 and result["failed_count"] == 0
+    assert [r["ok"] for r in result["results"]] == [True] * 4
+
+
+async def test_workflow_stock_apply_failing_action_does_not_abort_the_rest():
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    client = AsyncMock()
+    with (
+        patch(
+            "grocy_mcp.core.stock.stock_consume",
+            AsyncMock(side_effect=[GrocyValidationError("holds 0"), "Consumed"]),
+        ),
+        patch("grocy_mcp.core.stock.stock_open", AsyncMock(return_value="Opened")),
+    ):
+        result = await workflow_stock_apply_data(
+            client,
+            [
+                {"action": "consume", "product": "A", "amount": 1},
+                {"action": "open", "product": "B"},
+                {"action": "consume", "product": "C", "amount": 1},
+            ],
+        )
+    assert result["applied_count"] == 2 and result["failed_count"] == 1
+    assert [r["ok"] for r in result["results"]] == [False, True, True]
+    assert result["results"][0]["error"] == "holds 0"
+
+
+async def test_workflow_stock_apply_invalid_items_are_reported_by_index():
+    client = AsyncMock()
+    with patch("grocy_mcp.core.stock.stock_open", AsyncMock(return_value="Opened")) as open_:
+        result = await workflow_stock_apply_data(
+            client,
+            [
+                {"action": "consume", "product": "Milk", "amount": -1},
+                {"action": "fly", "product": "Milk"},
+                {"action": "open", "product": "Milk", "color": "red"},
+                "not an object",
+                {"action": "open", "product": "Milk"},
+            ],
+        )
+    open_.assert_awaited_once()
+    assert [r["ok"] for r in result["results"]] == [False, False, False, False, True]
+    assert "actions[0]" in result["results"][0]["error"]
+    assert result["applied_count"] == 1 and result["failed_count"] == 4
+
+
+async def test_workflow_stock_apply_rejects_non_array_and_too_many_actions():
+    client = AsyncMock()
+    with pytest.raises(GrocyValidationError, match="expected a JSON array"):
+        await workflow_stock_apply_data(client, {"action": "open"})
+    with pytest.raises(GrocyValidationError, match="at most 100"):
+        await workflow_stock_apply_data(client, [{"action": "open", "product": "x"}] * 101)
+
+
+async def test_workflow_stock_apply_text_summary():
+    from grocy_mcp.core.workflows import workflow_stock_apply
+
+    client = AsyncMock()
+    with patch("grocy_mcp.core.stock.stock_open", AsyncMock(return_value="Opened 1 of 'Milk'.")):
+        text = await workflow_stock_apply(client, [{"action": "open", "product": "Milk"}])
+    assert "1 applied, 0 failed" in text and "[0] open Milk: ok" in text
+
+
+async def test_workflow_stock_apply_strips_grocy_json_wrapper_and_names_unknown_actions():
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    client = AsyncMock()
+    wrapped = GrocyValidationError(
+        'Validation error: {"error_message":"Amount to be consumed cannot be > current stock"}'
+    )
+    with patch("grocy_mcp.core.stock.stock_consume", AsyncMock(side_effect=wrapped)):
+        result = await workflow_stock_apply_data(
+            client,
+            [
+                {"action": "consume", "product": "A", "amount": 9},
+                {"action": "explode", "product": "A"},
+                {"product": "A"},
+            ],
+        )
+    assert result["results"][0]["error"] == "Amount to be consumed cannot be > current stock"
+    assert "unknown action 'explode'" in result["results"][1]["error"]
+    assert "consume, open, inventory, transfer" in result["results"][1]["error"]
+    assert "unknown action None" in result["results"][2]["error"]
