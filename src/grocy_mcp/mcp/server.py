@@ -247,7 +247,10 @@ def create_mcp_server() -> FastMCP:
         or opened state. This rewrites stock history, so confirm with the user before using it.
 
         Only the fields you pass change. Find entry IDs with stock_entries_tool. To remove
-        stock use stock_consume_tool; to reverse a booking use stock_undo_tool.
+        stock use stock_consume_tool; to reverse a booking use stock_undo_tool. The edit is
+        coordinated with this server's other stock tools; if the entry was changed by something
+        else (a recipe consumption, the Grocy UI) between reading and writing, nothing is
+        written and you are asked to list the entries and retry.
 
         Args:
             entry_id: Stock entry ID (from stock_entries_tool).
