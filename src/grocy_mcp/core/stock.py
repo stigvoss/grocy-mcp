@@ -188,6 +188,9 @@ async def stock_levels_data(
 ) -> list[dict]:
     """Return every active product with its stock amount, including products at 0 stock.
 
+    ``amount`` is the product's own stock; ``amount_aggregated`` also counts child products, so a
+    parent whose children are in stock is not mistaken for out of stock.
+
     Args:
         client: Grocy client.
         product_group: Product group name or numeric ID to filter on.
@@ -199,9 +202,12 @@ async def stock_levels_data(
     locations = {loc["id"]: loc.get("name") for loc in await client.get_objects("locations")}
 
     amounts: dict[int, float] = {}
+    aggregated: dict[int, float] = {}
     for row in stock:
         pid = row.get("product_id")
-        amounts[pid] = amounts.get(pid, 0.0) + float(row.get("amount") or 0)
+        amount = float(row.get("amount") or 0)
+        amounts[pid] = amounts.get(pid, 0.0) + amount
+        aggregated[pid] = aggregated.get(pid, 0.0) + float(row.get("amount_aggregated") or amount)
 
     group_id: int | None = None
     if product_group is not None:
@@ -232,6 +238,7 @@ async def stock_levels_data(
                 "product_id": product["id"],
                 "name": product.get("name"),
                 "amount": amounts.get(product["id"], 0.0),
+                "amount_aggregated": aggregated.get(product["id"], 0.0),
                 "stock_unit": units.get(product.get("qu_id_stock")),
                 "default_location": locations.get(product.get("location_id")),
                 "product_group_id": product.get("product_group_id"),
