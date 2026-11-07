@@ -268,15 +268,28 @@ def create_mcp_server() -> FastMCP:
             )
 
     @mcp.tool()
-    async def stock_consume_tool(product: str, amount: float) -> str:
+    async def stock_consume_tool(
+        product: str,
+        amount: float,
+        from_location: str | None = None,
+        spoiled: bool = False,
+    ) -> str:
         """Consume stock for a product (reduces the quantity on hand).
+
+        Without from_location Grocy picks the entry itself (opened first, then earliest due),
+        which may not be the one actually used. Pass from_location to take from a specific
+        location, e.g. the freezer; if that location holds less than amount, nothing is
+        consumed and the error says where the stock is.
 
         Args:
             product: Product name (e.g. "Milk") or numeric product ID.
             amount: Quantity to consume.
+            from_location: Optional location name (e.g. "Freezer") or numeric ID to consume from.
+            spoiled: Mark the consumption as spoiled/wasted, so waste does not look like
+                     normal use in the usage history.
         """
         async with _get_client() as client:
-            return await stock_consume(client, product, amount)
+            return await stock_consume(client, product, amount, from_location, spoiled)
 
     @mcp.tool()
     async def stock_transfer_tool(

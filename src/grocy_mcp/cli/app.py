@@ -424,12 +424,16 @@ def cmd_stock_add(
 def cmd_stock_consume(
     product: str = typer.Argument(..., help="Product name or ID."),
     amount: float = typer.Argument(..., help="Quantity to consume."),
+    from_location: str | None = typer.Option(
+        None, "--from-location", help="Consume from this location (name or ID)."
+    ),
+    spoiled: bool = typer.Option(False, "--spoiled", help="Mark as spoiled/wasted."),
 ) -> None:
     """Consume stock for a product."""
 
     async def _inner():
         async with _client() as client:
-            return await stock_consume(client, product, amount)
+            return await stock_consume(client, product, amount, from_location, spoiled)
 
     _exec(_inner())
 
