@@ -263,3 +263,9 @@ async def test_update_stock_entry_and_undo_booking(client, mock_api):
     await client.undo_booking(17)
     assert json.loads(put.calls.last.request.content) == {"amount": 2, "price": 1.5}
     assert undo.called
+
+
+async def test_get_stock_entry_null_response_is_not_found(client, mock_api):
+    mock_api.get("/stock/entry/999").mock(return_value=httpx.Response(200, content=b"null"))
+    with pytest.raises(GrocyNotFoundError, match="may have been consumed"):
+        await client.get_stock_entry(999)
