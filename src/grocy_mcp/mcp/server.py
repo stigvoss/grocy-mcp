@@ -105,6 +105,7 @@ from grocy_mcp.core.stock import (
     stock_undo,
 )
 from grocy_mcp.core.stock_journal import stock_journal
+from grocy_mcp.core.stock_usage import stock_usage_stats_data
 from grocy_mcp.core.system import entity_list, entity_manage, system_info, userfields_set
 from grocy_mcp.core.tasks import task_complete, task_create, task_delete, task_undo, tasks_list
 from grocy_mcp.core.workflows import (
@@ -805,6 +806,23 @@ def create_mcp_server() -> FastMCP:
             return await stock_journal(client, product)
 
     # ------------------------------------------------------------------ Tasks
+
+    @mcp.tool()
+    async def stock_usage_stats_tool(product: str, days: int = 90) -> dict:
+        """Summarise a product's usage over a window, so you need not read raw journal lines.
+
+        Returns purchases (count, total amount, dates, total spent, average unit price),
+        consumes (count, amount, plus spoiled kept apart), opens, average daily use, the median
+        and last gap in days between consume/open/purchase events, days since the last
+        movement and the current stock. Undone bookings and float-noise rows are ignored.
+        Unlike stock_journal_tool this is not limited to the 50 most recent entries.
+
+        Args:
+            product: Product name or numeric product ID.
+            days: Window in days (default 90, at most 3650).
+        """
+        async with _get_client() as client:
+            return await stock_usage_stats_data(client, product, days)
 
     @mcp.tool()
     async def tasks_list_tool(show_done: bool = False) -> str:
