@@ -475,6 +475,8 @@ async def workflow_stock_apply_data(client: GrocyClient, actions: list[dict] | o
                         entry["partial"] = True
         except GrocyError as error:
             entry.update(ok=False, error=_short_error(error))
+        except Exception as error:  # noqa: BLE001 - one bad item must not discard the others
+            entry.update(ok=False, error=f"Unexpected error: {type(error).__name__}: {error}")
         results.append(entry)
 
     applied = sum(1 for r in results if r["ok"])
