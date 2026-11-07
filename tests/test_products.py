@@ -310,3 +310,66 @@ async def test_product_create_keeps_the_new_id_when_the_userfield_request_fails(
     assert result["created"] is True and result["product_id"] == 77
     assert "77" in result["warning"] and "userfields_set_tool" in result["warning"]
     assert "userfields_set" not in result
+
+
+async def test_userfield_filters_treat_numeric_zero_as_a_value():
+    from grocy_mcp.core.products import userfield_tokens
+
+    client = AsyncMock()
+    client.get_objects.return_value = [
+        {"id": 1, "name": "Zero", "userfields": {"code": 0}},
+        {"id": 2, "name": "One", "userfields": {"code": 1}},
+        {"id": 3, "name": "Unset", "userfields": {"code": None}},
+        {"id": 4, "name": "Flag off", "userfields": {"code": False}},
+    ]
+    assert userfield_tokens(0) == ["0"] and userfield_tokens(None) == []
+    matched = await products_list_data(client, userfields_match={"code": "0"})
+    assert [p["id"] for p in matched] == [1]
+    contained = await products_list_data(client, userfields_contains={"code": "0"})
+    assert [p["id"] for p in contained] == [1]
+
+
+@pytest.mark.parametrize(
+    "name", ["Pepper, whole while", "Pepper, while whole", "while Pepper whole"]
+)
+async def test_duplicate_matching_does_not_depend_on_word_order(name):
+    from grocy_mcp.core.products import find_near_duplicates
+
+    found = find_near_duplicates(name, [{"id": 1, "name": "Pepper, whole white"}])
+    assert [f["product_id"] for f in found] == [1]
+
+
+async def test_duplicate_matching_long_names_still_work():
+    from grocy_mcp.core.products import find_near_duplicates
+
+    existing = "alpha bravo charlie delta echo foxtrot golf hotel india"
+    typo = "alpha bravo charlie delta echo foxtrot golf hotel indla"
+    assert find_near_duplicates(typo, [{"id": 1, "name": existing}])
+    assert not find_near_duplicates(
+        "one two three four five six seven eight nine", [{"id": 1, "name": existing}]
+    )
+
+
+async def test_an_id_wins_over_a_name_that_looks_like_it(create_client):
+    from grocy_mcp.core.products import product_create_data
+
+    async def get_objects(entity, query=None):
+        return {
+            "quantity_units": [{"id": 2, "name": "4"}, {"id": 4, "name": "Pack"}],
+            "locations": [{"id": 2, "name": "4"}, {"id": 4, "name": "Freezer"}],
+            "product_groups": [{"id": 3, "name": "7"}, {"id": 7, "name": "Dairy"}],
+            "products": [],
+        }[entity]
+
+    create_client.get_objects.side_effect = get_objects
+    result = await product_create_data(
+        create_client, "New thing", stock_unit="4", location="4", product_group="7"
+    )
+    data = create_client.create_object.call_args.args[1]
+    assert data["qu_id_stock"] == 4 and data["location_id"] == 4 and data["product_group_id"] == 7
+    assert result["stock_unit"] == "Pack" and result["location"] == "Freezer"
+    # a name still resolves when it is not also an ID
+    await product_create_data(
+        create_client, "Other", stock_unit="pack", location="freezer", force=True
+    )
+    assert create_client.create_object.call_args.args[1]["qu_id_stock"] == 4

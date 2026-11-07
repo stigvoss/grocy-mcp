@@ -104,3 +104,24 @@ async def test_usage_stats_same_day_events_count_as_zero_day_gaps(client):
     assert stats["purchases"]["count"] == 3
     assert stats["purchases"]["median_gap_days"] == 5.0  # gaps of 10 and 0 days
     assert stats["purchases"]["last_gap_days"] == 0
+
+
+async def test_usage_stats_booking_newer_than_now_is_today_not_minus_one(client):
+    client.get_objects.return_value = [
+        {**_row("2026-11-10", "purchase", 1), "row_created_timestamp": "2026-11-10 12:00:01"}
+    ]
+    with patch("grocy_mcp.core.stock_usage.resolve_product", return_value=7):
+        stats = await stock_usage_stats_data(client, "Milk", days=90, now=NOW)
+    assert stats["days_since_last_movement"] == 0
+    assert stats["purchases"]["count"] == 1  # still counted: it is a real booking
+
+
+async def test_usage_stats_keeps_recent_bookings_from_a_server_ahead_of_utc(client):
+    # Grocy in UTC+1 writes local time: a booking 30 minutes ago looks like 30 minutes ahead
+    client.get_objects.return_value = [
+        {**_row("2026-11-10", "consume", -2), "row_created_timestamp": "2026-11-10 12:30:00"}
+    ]
+    with patch("grocy_mcp.core.stock_usage.resolve_product", return_value=7):
+        stats = await stock_usage_stats_data(client, "Milk", days=7, now=NOW)
+    assert stats["consumes"]["total_amount"] == 2
+    assert stats["days_since_last_movement"] == 0

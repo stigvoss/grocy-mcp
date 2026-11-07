@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import itertools
 import math
 import re
 from typing import Any
@@ -28,7 +29,10 @@ def is_truthy_value(value: Any) -> bool:
 
 def userfield_tokens(value: Any) -> list[str]:
     """Split a comma-separated userfield value into trimmed, lower-cased tokens."""
-    return [t.strip().lower() for t in str(value or "").split(",") if t.strip()]
+    # Only None is "no value": a numeric 0 (or False) is a real userfield value
+    return [
+        t.strip().lower() for t in ("" if value is None else str(value)).split(",") if t.strip()
+    ]
 
 
 def userfield_contains(value: Any, needle: str) -> bool:
@@ -131,21 +135,37 @@ def _name_key(name: str) -> str:
     return " ".join(sorted(_words(name)))
 
 
+_MAX_PERMUTED_WORDS = 8  # 8! = 40 320 pairings; longer names fall back to greedy pairing
+
+
 def _words_similar(a: list[str], b: list[str]) -> bool:
     """True when both names have the same number of words and each word has a close match.
 
-    Each word of ``a`` is paired with the most similar unused word of ``b``, so a typo is found
-    wherever it sorts ("Minced veef" vs "Minced beef") and word order does not matter.
+    The words are paired one-to-one so that every pair meets the thresholds, whatever the word
+    order: a typo is found wherever it sorts ("Minced veef" vs "Minced beef") and a reordered
+    typo too ("Pepper, while whole" vs "Pepper, whole white"). All pairings are tried for names
+    of up to eight words; longer names use a greedy pairing.
     """
     if len(a) != len(b) or not a:
         return False
-    remaining = list(b)
+    ratio = [[difflib.SequenceMatcher(None, x, y).ratio() for y in b] for x in a]
+    n = len(a)
+
+    def qualifies(scores: list[float]) -> bool:
+        return min(scores) >= _WORD_MIN_RATIO and sum(scores) / n >= _WORDS_MEAN_RATIO
+
+    if n <= _MAX_PERMUTED_WORDS:
+        return any(
+            qualifies([ratio[i][j] for i, j in enumerate(pairing)])
+            for pairing in itertools.permutations(range(n))
+        )
+    unused = set(range(n))
     scores = []
-    for word in a:
-        best = max(remaining, key=lambda other: difflib.SequenceMatcher(None, word, other).ratio())
-        scores.append(difflib.SequenceMatcher(None, word, best).ratio())
-        remaining.remove(best)
-    return min(scores) >= _WORD_MIN_RATIO and sum(scores) / len(scores) >= _WORDS_MEAN_RATIO
+    for i in range(n):
+        j = max(unused, key=lambda k: ratio[i][k])
+        scores.append(ratio[i][j])
+        unused.remove(j)
+    return qualifies(scores)
 
 
 def find_near_duplicates(name: str, products: list[dict]) -> list[dict]:
@@ -169,10 +189,17 @@ def find_near_duplicates(name: str, products: list[dict]) -> list[dict]:
 
 
 def _resolve_known(items: list[dict], value: str | int, label: str) -> dict:
-    """Find an item by exact (case-insensitive) name or ID; the error lists the valid values."""
+    """Find an item by ID or exact (case-insensitive) name; the error lists the valid values.
+
+    IDs are searched first, like ``core/resolve.py``: an item that happens to be *named* "4"
+    must not shadow the item whose ID is 4 (a stock unit cannot be changed once stock exists).
+    """
     text = str(value).strip()
     for item in items:
-        if str(item["id"]) == text or (item.get("name") or "").casefold() == text.casefold():
+        if str(item["id"]) == text:
+            return item
+    for item in items:
+        if (item.get("name") or "").casefold() == text.casefold():
             return item
     valid = ", ".join(f"{i.get('name')} ({i['id']})" for i in items) or "none defined"
     raise GrocyValidationError(f"Unknown {label} '{text}'. Valid values: {valid}.")
