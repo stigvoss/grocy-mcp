@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `workflow_shopping_reconcile_apply_tool` accepts (and ignores) `previous_amount`, so actions from
+  the preview can be passed straight through
 - `stock_journal_tool` rounds amounts and hides entries that round to zero (float residue such as
   2.2e-16 from opening or transferring), noting how many were hidden
 - `stock_levels_tool` rows include `amount_aggregated` (own stock plus child products) so parent

@@ -154,6 +154,24 @@ async def test_workflow_shopping_reconcile_apply_data():
     assert result["applied_count"] == 2
 
 
+async def test_workflow_shopping_reconcile_preview_actions_pass_straight_to_apply():
+    client = AsyncMock()
+    client.get_shopping_list.return_value = [
+        {"id": 3, "product_id": 12, "amount": 1},
+        {"id": 4, "product_id": 12, "amount": 3},
+    ]
+
+    preview = await workflow_shopping_reconcile_preview_data(
+        client, [{"product_id": 12, "amount": 2}], list_id=1
+    )
+    result = await workflow_shopping_reconcile_apply_data(client, preview[0]["actions"])
+
+    client.remove_shopping_list_item.assert_awaited_once_with(3)
+    client.update_shopping_list_item.assert_awaited_once_with(4, {"amount": 2.0})
+    assert result["applied_count"] == 2
+    assert all("previous_amount" not in action for action in result["applied_actions"])
+
+
 async def test_workflow_stock_intake_apply_passes_price_and_options():
     client = AsyncMock()
 

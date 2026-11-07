@@ -1116,7 +1116,8 @@ def create_mcp_server() -> FastMCP:
         """Apply explicit shopping-list reconciliation actions from a preview step.
 
         Args:
-            actions: JSON array of action objects from workflow_shopping_reconcile_preview_tool.
+            actions: JSON array of action objects from the "actions" lists returned by
+                workflow_shopping_reconcile_preview_tool. They can be passed unchanged.
         """
         parsed_actions = _parse_json_arg(actions, "actions")
         async with _get_client() as client:
