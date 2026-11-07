@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `entity_create_tool` / `entity_update_tool` / `entity_delete_tool` reject read-only views such as
+  `stock` up front, pointing to the `stock_*` tools, and the entity tool descriptions list which
+  entities are read-only
 - `stock_transfer_tool` (and `grocy stock transfer --from-location`) takes an optional
   `from_location`; without it the single location holding stock is used, and stock spread over
   several locations returns an error asking for `from_location` (previously every call failed with

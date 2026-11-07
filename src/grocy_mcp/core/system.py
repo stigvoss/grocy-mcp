@@ -5,11 +5,29 @@ from __future__ import annotations
 import re
 
 from grocy_mcp.client import GrocyClient
+from grocy_mcp.core.reference_data import NON_DELETABLE_ENTITIES, READ_ONLY_ENTITIES
 from grocy_mcp.exceptions import GrocyValidationError
 
 _NOT_NULL = re.compile(r"NOT NULL constraint failed: (\w+)\.(\w+)")
 _UNIQUE = re.compile(r"UNIQUE constraint failed: ((?:\w+\.\w+(?:, )?)+)")
 _FOREIGN_KEY = "FOREIGN KEY constraint failed"
+
+
+_STOCK_HINT = (
+    "Change stock with stock_add_tool, stock_consume_tool, stock_transfer_tool, "
+    "stock_open_tool or stock_inventory_tool."
+)
+
+
+def _reject_read_only(entity: str, action: str) -> None:
+    """Refuse writes to read-only views before sending a request Grocy would reject."""
+    blocked = READ_ONLY_ENTITIES | (NON_DELETABLE_ENTITIES if action == "delete" else set())
+    if entity in blocked:
+        hint = f" {_STOCK_HINT}" if entity.startswith("stock") else ""
+        raise GrocyValidationError(
+            f"Cannot {action} '{entity}': it is a read-only view that entity_list_tool can "
+            f"read but not change.{hint}"
+        )
 
 
 def _friendly_constraint_error(entity: str, action: str, error: GrocyValidationError) -> Exception:
@@ -89,6 +107,7 @@ async def entity_manage(
     """Perform create, update, or delete on any Grocy entity."""
     match action:
         case "create":
+            _reject_read_only(entity, "create")
             payload = data or {}
             try:
                 created_id = await client.create_object(entity, payload)
@@ -97,6 +116,7 @@ async def entity_manage(
             return f"Created {entity} object with ID {created_id}."
 
         case "update":
+            _reject_read_only(entity, "update")
             if obj_id is None:
                 raise GrocyValidationError("Update requires an obj_id.")
             payload = data or {}
@@ -111,6 +131,7 @@ async def entity_manage(
             return f"Updated {entity} object ID {obj_id}."
 
         case "delete":
+            _reject_read_only(entity, "delete")
             if obj_id is None:
                 raise GrocyValidationError("Delete requires an obj_id.")
             await client.delete_object(entity, obj_id)
