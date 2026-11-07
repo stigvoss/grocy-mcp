@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import difflib
-import itertools
 import math
 import re
 from typing import Any
@@ -135,37 +134,57 @@ def _name_key(name: str) -> str:
     return " ".join(sorted(_words(name)))
 
 
-_MAX_PERMUTED_WORDS = 8  # 8! = 40 320 pairings; longer names fall back to greedy pairing
+_MAX_MATCHED_WORDS = 16  # bitmask states grow as 2**words; longer names use greedy pairing
 
 
 def _words_similar(a: list[str], b: list[str]) -> bool:
     """True when both names have the same number of words and each word has a close match.
 
-    The words are paired one-to-one so that every pair meets the thresholds, whatever the word
-    order: a typo is found wherever it sorts ("Minced veef" vs "Minced beef") and a reordered
-    typo too ("Pepper, while whole" vs "Pepper, whole white"). All pairings are tried for names
-    of up to eight words; longer names use a greedy pairing.
+    The words are paired one-to-one so that every pair meets the per-word minimum and the
+    pairs meet the mean, whatever the word order: a typo is found wherever it sorts ("Minced
+    veef" vs "Minced beef") and a reordered typo too ("Pepper, while whole" vs "Pepper, whole
+    white"). The best pairing is found with a dynamic programme over the set of already used
+    words of ``b`` (no factorial enumeration), and a word without any plausible counterpart
+    ends the comparison at once, so unrelated names are cheap.
     """
     if len(a) != len(b) or not a:
         return False
-    ratio = [[difflib.SequenceMatcher(None, x, y).ratio() for y in b] for x in a]
     n = len(a)
+    allowed: list[list[tuple[int, float]]] = []
+    for word in a:
+        row = []
+        for j, other in enumerate(b):
+            ratio = difflib.SequenceMatcher(None, word, other).ratio()
+            if ratio >= _WORD_MIN_RATIO:
+                row.append((j, ratio))
+        if not row:
+            return False
+        allowed.append(row)
 
-    def qualifies(scores: list[float]) -> bool:
-        return min(scores) >= _WORD_MIN_RATIO and sum(scores) / n >= _WORDS_MEAN_RATIO
+    if n > _MAX_MATCHED_WORDS:
+        unused = set(range(n))
+        total = 0.0
+        for row in allowed:
+            candidates = [(j, r) for j, r in row if j in unused]
+            if not candidates:
+                return False
+            j, r = max(candidates, key=lambda pair: pair[1])
+            unused.remove(j)
+            total += r
+        return total / n >= _WORDS_MEAN_RATIO
 
-    if n <= _MAX_PERMUTED_WORDS:
-        return any(
-            qualifies([ratio[i][j] for i, j in enumerate(pairing)])
-            for pairing in itertools.permutations(range(n))
-        )
-    unused = set(range(n))
-    scores = []
-    for i in range(n):
-        j = max(unused, key=lambda k: ratio[i][k])
-        scores.append(ratio[i][j])
-        unused.remove(j)
-    return qualifies(scores)
+    best = {0: 0.0}  # used-word mask of b -> best score sum so far
+    for row in allowed:
+        following: dict[int, float] = {}
+        for mask, total in best.items():
+            for j, ratio in row:
+                bit = 1 << j
+                if not mask & bit and total + ratio > following.get(mask | bit, -1.0):
+                    following[mask | bit] = total + ratio
+        if not following:
+            return False
+        best = following
+    return max(best.values()) / n >= _WORDS_MEAN_RATIO
 
 
 def find_near_duplicates(name: str, products: list[dict]) -> list[dict]:

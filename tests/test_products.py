@@ -373,3 +373,55 @@ async def test_an_id_wins_over_a_name_that_looks_like_it(create_client):
         create_client, "Other", stock_unit="pack", location="freezer", force=True
     )
     assert create_client.create_object.call_args.args[1]["qu_id_stock"] == 4
+
+
+def test_word_matching_is_one_to_one():
+    from grocy_mcp.core.products import _words_similar
+
+    # both "whole" would pair with the single "whole"; "white" is too far from "whole" to stand in
+    assert not _words_similar(["whole", "whole"], ["whole", "white"])
+    assert _words_similar(["whole", "while"], ["white", "whole"])
+
+
+def test_long_scrambled_names_with_typos_still_match():
+    from grocy_mcp.core.products import _words_similar
+
+    original = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"]
+    scrambled = [
+        "hotel",
+        "golf",
+        "foxtrot",
+        "echoo",
+        "delta",
+        "charlie",
+        "bravo",
+        "alpha",
+    ]  # one typo
+    assert _words_similar(scrambled, original)
+    assert _words_similar(original[::-1], original)
+
+
+def test_unrelated_names_are_cheap_even_with_many_words():
+    import time
+
+    from grocy_mcp.core.products import _words_similar
+
+    eight = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"]
+    unrelated = ["one", "two", "three", "four", "five", "six", "seven", "nine"]
+    start = time.perf_counter()
+    assert not any(_words_similar(unrelated, eight) for _ in range(2000))
+    assert time.perf_counter() - start < 2.0  # a factorial search would need minutes
+
+    # worst case for the search itself: every word resembles every word
+    similar = ["aaaaa", "aaaab", "aaaac", "aaaad", "aaaae", "aaaaf", "aaaag", "aaaah"]
+    start = time.perf_counter()
+    assert _words_similar(similar, list(reversed(similar)))
+    assert time.perf_counter() - start < 1.0
+
+
+def test_names_beyond_the_dynamic_programme_limit_use_greedy_pairing():
+    from grocy_mcp.core.products import _words_similar
+
+    words = [f"word{chr(97 + i)}x" for i in range(17)]
+    assert _words_similar(words, list(reversed(words)))
+    assert not _words_similar(words, [f"zzz{i}" for i in range(17)])
