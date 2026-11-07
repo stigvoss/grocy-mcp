@@ -1155,7 +1155,12 @@ def create_mcp_server() -> FastMCP:
     async def entity_list_tool(entity: str) -> str:
         """List all objects of a Grocy entity type.
 
-        This is a generic tool for browsing any Grocy data table.
+        This is a generic tool for browsing any Grocy data table. Some entities are
+        read-only views and cannot be changed with the entity create/update/delete tools:
+        stock, stock_log, stock_current_locations, chores_log, products_last_purchased,
+        products_average_price, quantity_unit_conversions_resolved, recipes_pos_resolved,
+        battery_charge_cycles, product_barcodes_view and permission_hierarchy. Change stock
+        with the stock_* tools (stock_add_tool, stock_transfer_tool, ...).
 
         Args:
             entity: Entity type name. Common values: 'products', 'locations',
@@ -1187,7 +1192,9 @@ def create_mcp_server() -> FastMCP:
         """Update an existing Grocy entity object by its ID.
 
         Only the fields provided in data are changed; other fields are left as-is.
-        A 'userfields' key is rejected: use userfields_set_tool for userfields.
+        Read-only views such as 'stock' (listed by entity_list_tool) cannot be updated;
+        use the stock_* tools for stock. A 'userfields' key is rejected: use
+        userfields_set_tool for userfields.
 
         Args:
             entity: Entity type name (e.g. 'products', 'locations').

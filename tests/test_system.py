@@ -169,3 +169,22 @@ async def test_entity_create_composite_unique_error_names_all_columns(mock_clien
     with pytest.raises(GrocyValidationError) as exc:
         await entity_manage(mock_client, "product_barcodes", "create", data={})
     assert "combination of 'barcode', 'shopping_location_id'" in str(exc.value)
+
+
+@pytest.mark.parametrize("action", ["create", "update", "delete"])
+async def test_entity_write_to_stock_is_rejected_with_pointer_to_stock_tools(mock_client, action):
+    with pytest.raises(GrocyValidationError, match="read-only view.*stock_transfer_tool"):
+        await entity_manage(mock_client, "stock", action, obj_id=3, data={"location_id": 7})
+    mock_client.create_object.assert_not_called()
+    mock_client.update_object.assert_not_called()
+    mock_client.delete_object.assert_not_called()
+
+
+async def test_entity_write_to_other_read_only_view_is_rejected(mock_client):
+    with pytest.raises(GrocyValidationError, match="'stock_log'.*read-only"):
+        await entity_manage(mock_client, "stock_log", "update", obj_id=1, data={})
+
+
+async def test_entity_update_of_writable_entity_still_works(mock_client):
+    await entity_manage(mock_client, "locations", "update", obj_id=2, data={"name": "Cellar"})
+    mock_client.update_object.assert_called_once_with("locations", 2, {"name": "Cellar"})
