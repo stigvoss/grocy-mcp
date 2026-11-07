@@ -413,7 +413,12 @@ async def workflow_stock_apply_data(client: GrocyClient, actions: list[dict] | o
     own result, and the reply says exactly which were applied. Actions run in the order given, so
     several actions on the same product see each other's effects.
     """
-    from grocy_mcp.core.stock import stock_consume, stock_inventory, stock_open, stock_transfer
+    from grocy_mcp.core.stock import (
+        stock_consume,
+        stock_inventory_outcome,
+        stock_open_outcome,
+        stock_transfer,
+    )
 
     if not isinstance(actions, list):
         raise GrocyValidationError("Invalid actions: expected a JSON array")
@@ -448,17 +453,26 @@ async def workflow_stock_apply_data(client: GrocyClient, actions: list[dict] | o
                 message = await stock_consume(
                     client, act.product, act.amount, act.from_location, act.spoiled
                 )
-            elif act.action == "open":
-                message = await stock_open(client, act.product, act.amount)
-            elif act.action == "inventory":
-                message = await stock_inventory(
-                    client, act.product, act.new_amount, act.opened_amount
-                )
-            else:
+                entry.update(ok=True, message=message)
+            elif act.action == "transfer":
                 message = await stock_transfer(
                     client, act.product, act.amount, act.to_location, act.from_location
                 )
-            entry.update(ok=True, message=message)
+                entry.update(ok=True, message=message)
+            else:
+                # open and inventory report whether the request was carried out, not just text
+                if act.action == "open":
+                    outcome = await stock_open_outcome(client, act.product, act.amount)
+                else:
+                    outcome = await stock_inventory_outcome(
+                        client, act.product, act.new_amount, act.opened_amount
+                    )
+                if outcome.ok:
+                    entry.update(ok=True, message=outcome.message)
+                else:
+                    entry.update(ok=False, error=outcome.message)
+                    if outcome.partial:
+                        entry["partial"] = True
         except GrocyError as error:
             entry.update(ok=False, error=_short_error(error))
         results.append(entry)
@@ -474,7 +488,7 @@ async def workflow_stock_apply(client: GrocyClient, actions: list[dict] | object
         f"Workflow stock apply: {result['applied_count']} applied, {result['failed_count']} failed."
     ]
     for r in result["results"]:
-        status = "ok" if r["ok"] else "FAILED"
+        status = "ok" if r["ok"] else ("PARTIAL" if r.get("partial") else "FAILED")
         lines.append(
             f"  [{r['index']}] {r['action']} {r.get('product', '')}: {status} - "
             f"{r.get('message') or r.get('error')}"

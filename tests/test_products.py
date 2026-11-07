@@ -208,6 +208,7 @@ async def test_product_create_unknown_references_list_valid_values(create_client
         ("MINCED BEEF frozen 200G", "same name"),
         ("Milk whole", "same name"),
         ("Whole milks", "very similar"),
+        ("Minced beaf frozen 200g", "very similar"),
     ],
 )
 async def test_product_create_flags_near_duplicates_and_force_overrides(
@@ -258,3 +259,54 @@ async def test_product_create_validates_inputs_before_any_request(create_client,
         await product_create_data(create_client, stock_unit="Pack", location="Fridge", **kwargs)
     create_client.get_objects.assert_not_called()
     create_client.create_object.assert_not_called()
+
+
+def test_userfield_contains_lowercases_after_url_decoding():
+    from grocy_mcp.core.products import userfield_contains
+
+    assert userfield_contains("https://x/?query=OKSEK%C3%98D", "oksekød")
+    assert userfield_contains("https://x/?query=hakket%20OKSEK%C3%98D", "HAKKET oksekØd")
+    assert userfield_contains("OKSEK%c3%98d", "oksekød")
+    assert not userfield_contains("https://x/?query=mælk", "oksekød")
+
+
+async def test_encoded_uppercase_is_found_by_both_search_paths(userfield_client):
+    userfield_client.get_objects.return_value = [
+        {"id": 9, "name": "Beef", "userfields": {"bilkatogo": "https://x/?query=OKSEK%C3%98D"}}
+    ]
+    found = await products_list_data(userfield_client, userfields_contains={"bilkatogo": "oksekød"})
+    assert [p["id"] for p in found] == [9]
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Minced veef", "veef Minced", "MINCED BEEFF", "Mincd beef"],
+)
+async def test_product_create_flags_a_typo_wherever_it_sorts(name):
+    from grocy_mcp.core.products import find_near_duplicates
+
+    found = find_near_duplicates(name, [{"id": 1, "name": "Minced beef"}])
+    assert [f["product_id"] for f in found] == [1]
+
+
+@pytest.mark.parametrize("name", ["Minced chicken", "Beef", "Milk", "Minced beef stew"])
+async def test_product_create_does_not_flag_clearly_different_names(name):
+    from grocy_mcp.core.products import find_near_duplicates
+
+    assert find_near_duplicates(name, [{"id": 1, "name": "Minced beef"}]) == []
+
+
+@pytest.mark.parametrize("failure", ["GrocyNotFoundError", "GrocyServerError", "GrocyAuthError"])
+async def test_product_create_keeps_the_new_id_when_the_userfield_request_fails(
+    create_client, failure
+):
+    from grocy_mcp import exceptions
+    from grocy_mcp.core.products import product_create_data
+
+    create_client.update_userfields.side_effect = getattr(exceptions, failure)("boom")
+    result = await product_create_data(
+        create_client, "Butter", "Pack", "Fridge", userfields={"ai_notes": "x"}
+    )
+    assert result["created"] is True and result["product_id"] == 77
+    assert "77" in result["warning"] and "userfields_set_tool" in result["warning"]
+    assert "userfields_set" not in result

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import math
 import weakref
+from dataclasses import dataclass
 
 from grocy_mcp.client import GrocyClient
 from grocy_mcp.core.products import is_truthy_value, userfield_contains
@@ -70,20 +71,45 @@ async def stock_expiring(client: GrocyClient) -> str:
     return "\n".join(lines)
 
 
-# asyncio.Lock objects belong to one event loop, so the registry is keyed by the running loop.
+@dataclass(frozen=True)
+class StockOutcome:
+    """What a stock action did: ``ok`` is False when the request was not (fully) carried out.
+
+    ``partial`` means something was still changed (e.g. the stock total was adjusted but the
+    requested opened amount could not be reached), so the message is worth reading.
+    """
+
+    ok: bool
+    message: str
+    partial: bool = False
+
+
+_AMOUNT_EPSILON = 1e-9  # tolerance for float residue in the stock balance
+
+# asyncio.Lock objects belong to one event loop, so the registries are keyed by the running loop.
 # Both levels are weak: a closed loop and idle locks are dropped, while a caller that is
 # waiting for or holding a lock keeps it alive for the duration of its ``async with``.
-_inventory_locks: weakref.WeakKeyDictionary[
+_LockRegistry = weakref.WeakKeyDictionary[
     asyncio.AbstractEventLoop, weakref.WeakValueDictionary[int, asyncio.Lock]
-] = weakref.WeakKeyDictionary()
+]
+_inventory_locks: _LockRegistry = weakref.WeakKeyDictionary()
+_entry_locks: _LockRegistry = weakref.WeakKeyDictionary()
+
+
+def _keyed_lock(registry: _LockRegistry, key: int) -> asyncio.Lock:
+    locks = registry.setdefault(asyncio.get_running_loop(), weakref.WeakValueDictionary())
+    lock = locks.get(key)
+    if lock is None:
+        lock = locks[key] = asyncio.Lock()
+    return lock
 
 
 def _inventory_lock(product_id: int) -> asyncio.Lock:
-    locks = _inventory_locks.setdefault(asyncio.get_running_loop(), weakref.WeakValueDictionary())
-    lock = locks.get(product_id)
-    if lock is None:
-        lock = locks[product_id] = asyncio.Lock()
-    return lock
+    return _keyed_lock(_inventory_locks, product_id)
+
+
+def _entry_lock(entry_id: int) -> asyncio.Lock:
+    return _keyed_lock(_entry_locks, entry_id)
 
 
 def _split_amounts(info: dict) -> tuple[float, float, float]:
@@ -195,11 +221,15 @@ async def stock_consume(
         location_id = await resolve_location(client, from_location)
         held = {}
         for row in await client.get_stock_locations(product_id):
-            row_amount = tidy_amount(row.get("amount"))
-            if row_amount:
-                held[row.get("location_id")] = (row.get("location_name", "?"), row_amount)
+            # Compare the real balance; rounding is for display only, so a request for exactly
+            # what is held is never refused and a shortfall is never rounded away.
+            if tidy_amount(row.get("amount")):
+                held[row.get("location_id")] = (
+                    row.get("location_name", "?"),
+                    float(row.get("amount")),
+                )
         have = held.get(location_id, (from_location, 0.0))[1]
-        if have < amount:
+        if have < amount - _AMOUNT_EPSILON:
             elsewhere = ", ".join(f"{n} {format_amount(a)}" for n, a in held.values()) or "none"
             raise GrocyValidationError(
                 f"Cannot consume {format_amount(amount)} of '{product}' from '{from_location}': "
@@ -248,17 +278,18 @@ async def stock_transfer(
     return f"Transferred {amount} of '{product}' to location '{to_location}'."
 
 
-async def stock_inventory(
+async def stock_inventory_outcome(
     client: GrocyClient,
     product: str,
     new_amount: float,
     opened_amount: float | None = None,
-) -> str:
-    """Set the stock amount for a product via inventory and report the opened/unopened split.
+) -> StockOutcome:
+    """Set the stock amount via inventory and report the opened/unopened split.
 
     Grocy removes opened units first when the amount goes down. With ``opened_amount`` the
     missing units are opened afterwards so the result matches the physical count. Grocy cannot
-    un-open units, so if more units are open than asked for, the result says so.
+    un-open units. ``ok`` is False (and ``partial`` True, since the total was still adjusted)
+    when the requested ``opened_amount`` could not be reached.
     """
     if opened_amount is not None and not (
         math.isfinite(opened_amount) and 0 <= opened_amount <= new_amount
@@ -290,11 +321,59 @@ async def stock_inventory(
                 f" {format_amount(opened)} are open but {format_amount(opened_amount)} were requested; "
                 "Grocy cannot un-open units."
             )
+        elif opened_amount is not None and opened < opened_amount and not note:
+            note = (
+                f" Only {format_amount(opened)} of the requested {format_amount(opened_amount)} "
+                "are opened."
+            )
 
-    return (
-        f"Inventory updated: '{product}' set to {new_amount} "
-        f"(unopened {format_amount(unopened)}, opened {format_amount(opened)}).{note}"
+    return StockOutcome(
+        ok=not note,
+        message=(
+            f"Inventory updated: '{product}' set to {new_amount} "
+            f"(unopened {format_amount(unopened)}, opened {format_amount(opened)}).{note}"
+        ),
+        partial=bool(note),
     )
+
+
+async def stock_inventory(
+    client: GrocyClient,
+    product: str,
+    new_amount: float,
+    opened_amount: float | None = None,
+) -> str:
+    """Set the stock amount for a product via inventory and report the opened/unopened split."""
+    return (await stock_inventory_outcome(client, product, new_amount, opened_amount)).message
+
+
+async def stock_open_outcome(
+    client: GrocyClient, product: str, amount: float = 1.0
+) -> StockOutcome:
+    """Mark stock as opened; ``ok`` is False when there is not enough unopened stock."""
+    product_id = await resolve_product(client, product)
+    info = await client.get_stock_product(product_id)
+    name = (info.get("product") or {}).get("name", f"Product {product_id}")
+    _, opened, unopened = _split_amounts(info)
+
+    if unopened < amount:
+        return StockOutcome(
+            False,
+            f"Cannot open {format_amount(amount)} of '{name}': unopened amount is "
+            f"{format_amount(unopened)} (already opened: {format_amount(opened)}). "
+            "Add stock first, or consume the opened amount.",
+        )
+
+    try:
+        await client.open_stock(product_id, amount)
+    except GrocyValidationError:
+        return StockOutcome(
+            False,
+            f"Grocy refused to open {format_amount(amount)} of '{name}' "
+            f"(unopened: {format_amount(unopened)}, opened: {format_amount(opened)}). "
+            "Check the product's stock and 'opened' settings.",
+        )
+    return StockOutcome(True, f"Opened {amount} of '{product}'.")
 
 
 async def stock_open(client: GrocyClient, product: str, amount: float = 1.0) -> str:
@@ -303,26 +382,7 @@ async def stock_open(client: GrocyClient, product: str, amount: float = 1.0) -> 
     Returns an explanatory message instead of calling Grocy when there is not enough unopened
     stock.
     """
-    product_id = await resolve_product(client, product)
-    info = await client.get_stock_product(product_id)
-    name = (info.get("product") or {}).get("name", f"Product {product_id}")
-    _, opened, unopened = _split_amounts(info)
-
-    if unopened < amount:
-        return (
-            f"Cannot open {format_amount(amount)} of '{name}': unopened amount is {format_amount(unopened)} "
-            f"(already opened: {format_amount(opened)}). Add stock first, or consume the opened amount."
-        )
-
-    try:
-        await client.open_stock(product_id, amount)
-    except GrocyValidationError:
-        return (
-            f"Grocy refused to open {format_amount(amount)} of '{name}' "
-            f"(unopened: {format_amount(unopened)}, opened: {format_amount(opened)}). "
-            "Check the product's stock and 'opened' settings."
-        )
-    return f"Opened {amount} of '{product}'."
+    return (await stock_open_outcome(client, product, amount)).message
 
 
 async def stock_levels_data(
@@ -345,7 +405,7 @@ async def stock_levels_data(
     """
     in_location: dict[int, float] | None = None
     if location is not None:
-        location_id = await resolve_location(client, location)
+        location_id = await _existing_location_id(client, location)
         in_location = {}
         for row in await client.get_objects("stock_current_locations"):
             if row.get("location_id") == location_id:
@@ -408,6 +468,16 @@ async def stock_levels_data(
     return result
 
 
+async def _existing_location_id(client: GrocyClient, location: str) -> int:
+    """Resolve a location name or ID and make sure it exists (IDs are not checked by resolve)."""
+    location_id = await resolve_location(client, location)
+    known = await client.get_objects("locations")
+    if not any(loc.get("id") == location_id for loc in known):
+        available = ", ".join(f"{loc.get('name')} ({loc.get('id')})" for loc in known) or "none"
+        raise GrocyValidationError(f"Unknown location '{location}'. Available: {available}.")
+    return location_id
+
+
 async def stock_by_location_data(
     client: GrocyClient,
     location: str | None = None,
@@ -423,7 +493,7 @@ async def stock_by_location_data(
         location: Location name or numeric ID; all locations when omitted.
         freezer_only: Keep only freezer locations.
     """
-    location_id = await resolve_location(client, location) if location is not None else None
+    location_id = await _existing_location_id(client, location) if location is not None else None
     rows = await client.get_objects("stock_current_locations")
     products = {p["id"]: p for p in await client.get_objects("products")}
     units = {u["id"]: u.get("name") for u in await client.get_objects("quantity_units")}
@@ -556,25 +626,36 @@ async def stock_entry_edit(
         if value is not None and not is_iso_date(value):
             raise GrocyValidationError(f"{field} must be formatted as YYYY-MM-DD.")
 
-    current = await client.get_stock_entry(entry_id)
-    changes = {
-        "amount": amount,
-        "best_before_date": best_before_date,
-        "price": price,
-        "purchased_date": purchased_date,
-        "open": None if open is None else int(open),
-    }
-    if location is not None:
-        changes["location_id"] = await resolve_location(client, location)
-    changes = {k: v for k, v in changes.items() if v is not None}
+    # Serialise the read/merge/write per entry (across clients): each PUT carries values from
+    # its own read, so overlapping edits would otherwise restore each other's old values.
+    async with _entry_lock(entry_id):
+        current = await client.get_stock_entry(entry_id)
+        changes = {
+            "amount": amount,
+            "best_before_date": best_before_date,
+            "price": price,
+            "purchased_date": purchased_date,
+            "open": None if open is None else int(open),
+        }
+        if location is not None:
+            changes["location_id"] = await resolve_location(client, location)
+        changes = {k: v for k, v in changes.items() if v is not None}
 
-    keep = ("amount", "best_before_date", "purchased_date", "price", "location_id", "open")
-    payload = {k: current[k] for k in keep if current.get(k) is not None}
-    payload["shopping_location_id"] = current.get("shopping_location_id")
-    payload.update(changes)
-    if payload.get("shopping_location_id") is None:
-        del payload["shopping_location_id"]
-    await client.update_stock_entry(entry_id, payload)
+        # Grocy writes back every field it is sent and clears the ones it is not, so everything
+        # the entry has (including its note) is sent again.
+        keep = (
+            "amount",
+            "best_before_date",
+            "purchased_date",
+            "price",
+            "location_id",
+            "open",
+            "note",
+            "shopping_location_id",
+        )
+        payload = {k: current[k] for k in keep if current.get(k) is not None}
+        payload.update(changes)
+        await client.update_stock_entry(entry_id, payload)
 
     def show(value: object) -> str:
         return format_amount(value) if isinstance(value, float) else str(value)

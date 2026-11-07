@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import unquote_plus
 
 from grocy_mcp.client import GrocyClient
-from grocy_mcp.exceptions import GrocyValidationError
+from grocy_mcp.exceptions import GrocyError, GrocyValidationError
 
 _USERFIELDS_PREFIX = "userfields."
 
@@ -35,9 +35,10 @@ def userfield_contains(value: Any, needle: str) -> bool:
     """Case-insensitive substring match, also against the URL-decoded value (query=hakket%20...)."""
     if value is None:
         return False
-    text = str(value).lower()
+    # Decode before lowercasing: %C3%98 decodes to "Ø", which only lowercases once it is decoded.
+    raw = str(value)
     needle = needle.strip().lower()
-    return bool(needle) and (needle in text or needle in unquote_plus(text))
+    return bool(needle) and (needle in raw.lower() or needle in unquote_plus(raw).lower())
 
 
 def _select_fields(product: dict, fields: list[str]) -> dict:
@@ -117,25 +118,49 @@ async def products_list_data(
     return result
 
 
-_NEAR_DUPLICATE_RATIO = 0.88
+_WORD_MIN_RATIO = 0.75  # every word must resemble its counterpart at least this much
+_WORDS_MEAN_RATIO = 0.87  # and the words must resemble their counterparts this much on average
+
+
+def _words(name: str) -> list[str]:
+    return re.findall(r"\w+", name.casefold())
 
 
 def _name_key(name: str) -> str:
     """Case-insensitive name with the words sorted, so word order and punctuation do not matter."""
-    return " ".join(sorted(re.findall(r"\w+", name.casefold())))
+    return " ".join(sorted(_words(name)))
+
+
+def _words_similar(a: list[str], b: list[str]) -> bool:
+    """True when both names have the same number of words and each word has a close match.
+
+    Each word of ``a`` is paired with the most similar unused word of ``b``, so a typo is found
+    wherever it sorts ("Minced veef" vs "Minced beef") and word order does not matter.
+    """
+    if len(a) != len(b) or not a:
+        return False
+    remaining = list(b)
+    scores = []
+    for word in a:
+        best = max(remaining, key=lambda other: difflib.SequenceMatcher(None, word, other).ratio())
+        scores.append(difflib.SequenceMatcher(None, word, best).ratio())
+        remaining.remove(best)
+    return min(scores) >= _WORD_MIN_RATIO and sum(scores) / len(scores) >= _WORDS_MEAN_RATIO
 
 
 def find_near_duplicates(name: str, products: list[dict]) -> list[dict]:
     """Return existing products whose name is the same, or nearly the same, as ``name``."""
     key = _name_key(name)
+    words = _words(name)
     found = []
     for product in products:
-        other = _name_key(product.get("name") or "")
+        other_name = product.get("name") or ""
+        other = _name_key(other_name)
         if not other:
             continue
         if other == key:
             reason = "same name (ignoring case and word order)"
-        elif difflib.SequenceMatcher(None, key, other).ratio() >= _NEAR_DUPLICATE_RATIO:
+        elif _words_similar(words, _words(other_name)):
             reason = "very similar name"
         else:
             continue
@@ -232,9 +257,10 @@ async def product_create_data(
         try:
             await client.update_userfields("products", product_id, userfields)
             result["userfields_set"] = sorted(userfields)
-        except GrocyValidationError as error:
+        except GrocyError as error:
             result["warning"] = (
-                f"Product created, but the userfields were not saved ({error}). "
-                "Set them with userfields_set_tool."
+                f"Product {product_id} was created, but the userfields could not be saved or "
+                f"confirmed ({error}). Check them with products_list_tool and set them with "
+                "userfields_set_tool."
             )
     return result

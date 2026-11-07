@@ -185,5 +185,15 @@ async def test_shopping_list_view_shows_note_only_lines(mock_client):
         {"id": 8, "product_id": None, "amount": 1, "note": "Spinat 300 g (Tue)"}
     ]
     result = await shopping_list_view(mock_client)
-    assert "[8] Spinat 300 g (Tue) — note" in result
+    assert "[8] Spinat 300 g (Tue) — 1 (note)" in result
     assert "Product None" not in result
+
+
+async def test_shopping_list_view_shows_the_quantity_of_note_only_lines(mock_client):
+    mock_client.get_shopping_list.return_value = [
+        {"id": 8, "product_id": None, "amount": 5, "note": "Spinat"},
+        {"id": 9, "product_id": None, "amount": 1, "note": "Basilikum"},
+    ]
+    result = await shopping_list_view(mock_client)
+    assert "[8] Spinat — 5 (note)" in result
+    assert "[9] Basilikum — 1 (note)" in result
