@@ -11,7 +11,7 @@ from grocy_mcp.client import GrocyClient
 from grocy_mcp.core.products import is_truthy_value, userfield_contains
 from grocy_mcp.core.resolve import resolve_location, resolve_product
 from grocy_mcp.core.utils import format_amount, is_iso_date, tidy_amount, zero_rows_note
-from grocy_mcp.exceptions import GrocyValidationError
+from grocy_mcp.exceptions import GrocyError, GrocyValidationError
 
 
 async def stock_overview(client: GrocyClient) -> str:
@@ -300,40 +300,63 @@ async def stock_inventory_outcome(
     # Serialise the read/adjust/open sequence per product, so overlapping calls in this server
     # cannot both read the same opened count and each open the missing units.
     async with _inventory_lock(product_id):
-        total, _, _ = _split_amounts(await client.get_stock_product(product_id))
-        if total != new_amount:
-            # Grocy rejects an inventory that equals the current amount, so skip it then
-            await client.inventory_stock(product_id, new_amount)
-        total, opened, unopened = _split_amounts(await client.get_stock_product(product_id))
-
-        note = ""
-        if opened_amount is not None and opened < opened_amount:
-            try:
-                await client.open_stock(product_id, opened_amount - opened)
-            except GrocyValidationError:
-                note = (
-                    f" The inventory was applied, but opening {format_amount(opened_amount - opened)} "
-                    f"more to reach {format_amount(opened_amount)} opened failed."
-                )
+        done: list[str] = []  # writes that really happened, so a later failure can say so
+        try:
+            total, _, _ = _split_amounts(await client.get_stock_product(product_id))
+            if total != new_amount:
+                # Grocy rejects an inventory that equals the current amount, so skip it then
+                await client.inventory_stock(product_id, new_amount)
+                done.append(f"stock set to {format_amount(new_amount)}")
             total, opened, unopened = _split_amounts(await client.get_stock_product(product_id))
-        if opened_amount is not None and opened > opened_amount:
-            note += (
-                f" {format_amount(opened)} are open but {format_amount(opened_amount)} were requested; "
-                "Grocy cannot un-open units."
-            )
-        elif opened_amount is not None and opened < opened_amount and not note:
-            note = (
-                f" Only {format_amount(opened)} of the requested {format_amount(opened_amount)} "
-                "are opened."
+
+            note = ""
+            if opened_amount is not None and opened < opened_amount:
+                missing = format_amount(opened_amount - opened)
+                try:
+                    await client.open_stock(product_id, opened_amount - opened)
+                    done.append(f"{missing} opened")
+                except GrocyValidationError:
+                    note = (
+                        f" The inventory was applied, but opening {missing} more to reach "
+                        f"{format_amount(opened_amount)} opened failed."
+                        if done
+                        else f" Opening {missing} more to reach "
+                        f"{format_amount(opened_amount)} opened failed."
+                    )
+                total, opened, unopened = _split_amounts(await client.get_stock_product(product_id))
+            if opened_amount is not None and opened > opened_amount:
+                note += (
+                    f" {format_amount(opened)} are open but {format_amount(opened_amount)} were "
+                    "requested; Grocy cannot un-open units."
+                )
+            elif opened_amount is not None and opened < opened_amount and not note:
+                note = (
+                    f" Only {format_amount(opened)} of the requested "
+                    f"{format_amount(opened_amount)} are opened."
+                )
+        except GrocyError as error:
+            if not done:
+                raise  # nothing was written, so this is an ordinary failure
+            return StockOutcome(
+                ok=False,
+                message=(
+                    f"Inventory for '{product}' was only partly applied: {', '.join(done)}, but "
+                    f"a later step failed ({error}). Check the result with "
+                    "stock_product_info_tool."
+                ),
+                partial=True,
             )
 
+    adjusted = any(item.startswith("stock set") for item in done)
     return StockOutcome(
         ok=not note,
         message=(
-            f"Inventory updated: '{product}' set to {new_amount} "
+            f"{'Inventory updated' if adjusted else 'No inventory change needed'}: "
+            f"'{product}' at {new_amount} "
             f"(unopened {format_amount(unopened)}, opened {format_amount(opened)}).{note}"
         ),
-        partial=bool(note),
+        # partial: something was really written even though the request was not met in full
+        partial=bool(note) and bool(done),
     )
 
 
