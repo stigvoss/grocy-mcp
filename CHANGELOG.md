@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Shopping list notes**: `shopping_list_add_tool` (and `grocy shopping add`) accepts a note-only
+  line without a product and an optional `skip_if_present` that does nothing when the product or
+  identical note is already listed; the shopping list view shows note-only lines
 - **Batch stock actions**: `workflow_stock_apply_tool` (and `grocy workflow stock-apply`) applies a
   mixed list of consume, open, inventory and transfer actions in order; a failing action does not
   abort the others and every action gets its own result

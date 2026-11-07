@@ -265,6 +265,18 @@ async def test_update_stock_entry_and_undo_booking(client, mock_api):
     assert undo.called
 
 
+async def test_add_shopping_list_item_without_product_sends_no_product_id(client, mock_api):
+    route = mock_api.post("/objects/shopping_list").mock(
+        return_value=httpx.Response(200, json={"created_object_id": "9"})
+    )
+    assert await client.add_shopping_list_item(None, 1, 1, "Spinat") == "9"
+    assert json.loads(route.calls.last.request.content) == {
+        "amount": 1,
+        "shopping_list_id": 1,
+        "note": "Spinat",
+    }
+
+
 async def test_get_stock_entry_null_response_is_not_found(client, mock_api):
     mock_api.get("/stock/entry/999").mock(return_value=httpx.Response(200, content=b"null"))
     with pytest.raises(GrocyNotFoundError, match="may have been consumed"):

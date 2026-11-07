@@ -469,18 +469,31 @@ def create_mcp_server() -> FastMCP:
 
     @mcp.tool()
     async def shopping_list_add_tool(
-        product: str, amount: float = 1.0, list_id: int = 1, note: str | None = None
+        product: str | None = None,
+        amount: float = 1.0,
+        list_id: int = 1,
+        note: str | None = None,
+        skip_if_present: bool = False,
     ) -> str:
-        """Add a product to the shopping list.
+        """Add a product, or a free-text note-only line, to the shopping list.
+
+        For things that have no Grocy product (e.g. "Spinat 300 g (Tue)") leave product out and
+        pass only note. The reply contains the new item ID. With skip_if_present nothing is
+        added when the product (or an identical note) is already on the list, and the reply
+        says which item matched.
 
         Args:
-            product: Product name (e.g. "Butter") or numeric product ID.
+            product: Product name (e.g. "Butter") or numeric product ID. Optional when note is
+                     given.
             amount: Quantity to buy (default 1).
             list_id: Shopping list ID (default 1).
-            note: Optional free-text note (e.g. "salted" or "organic").
+            note: Free-text note: a comment on a product ("salted"), or the whole line when
+                  there is no product.
+            skip_if_present: Do nothing if the product (or identical note-only text) is already
+                             on this list.
         """
         async with _get_client() as client:
-            return await shopping_list_add(client, product, amount, list_id, note)
+            return await shopping_list_add(client, product, amount, list_id, note, skip_if_present)
 
     @mcp.tool()
     async def shopping_list_update_tool(item_id: int, data: str) -> str:

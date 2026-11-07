@@ -83,7 +83,7 @@ def test_shopping_add_with_all_options():
             )
 
     assert result.exit_code == 0
-    mock_add.assert_awaited_once_with(mock_client, "Butter", 3.0, 2, "salted")
+    mock_add.assert_awaited_once_with(mock_client, "Butter", 3.0, 2, "salted", False)
 
 
 def test_chore_execute_with_done_by():
@@ -372,7 +372,7 @@ def test_shopping_add_short_flags():
             )
 
     assert result.exit_code == 0
-    mock_add.assert_awaited_once_with(mock_client, "Milk", 2.0, 3, "organic")
+    mock_add.assert_awaited_once_with(mock_client, "Milk", 2.0, 3, "organic", False)
 
 
 # ------------------------------------------------ CLI end-to-end output tests
@@ -686,3 +686,17 @@ def test_discover_describe_entity_json_output():
 
     data = json.loads(result.output)
     assert data["entity"] == "products"
+
+
+def test_shopping_add_note_only_line_with_skip_flag():
+    with patch("grocy_mcp.cli.app.shopping_list_add", new_callable=AsyncMock) as mock_add:
+        mock_add.return_value = "ok"
+        with patch("grocy_mcp.cli.app._client") as mock_client_factory:
+            mock_client = MagicMock()
+            mock_client_factory.return_value.__aenter__.return_value = mock_client
+            result = runner.invoke(
+                app,
+                ["shopping", "add", "--note", "Spinat 300 g", "--skip-if-present"],
+            )
+    assert result.exit_code == 0, result.output
+    mock_add.assert_awaited_once_with(mock_client, None, 1.0, 1, "Spinat 300 g", True)
