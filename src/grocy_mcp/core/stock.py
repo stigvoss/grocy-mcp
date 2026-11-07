@@ -73,6 +73,8 @@ async def stock_expiring(client: GrocyClient) -> str:
 # asyncio.Lock objects belong to one event loop, so the registry is keyed by the running loop.
 # Both levels are weak: a closed loop and idle locks are dropped, while a caller that is
 # waiting for or holding a lock keeps it alive for the duration of its ``async with``.
+_AMOUNT_EPSILON = 1e-9  # tolerance for float residue in the stock balance
+
 _inventory_locks: weakref.WeakKeyDictionary[
     asyncio.AbstractEventLoop, weakref.WeakValueDictionary[int, asyncio.Lock]
 ] = weakref.WeakKeyDictionary()
@@ -195,11 +197,15 @@ async def stock_consume(
         location_id = await resolve_location(client, from_location)
         held = {}
         for row in await client.get_stock_locations(product_id):
-            row_amount = tidy_amount(row.get("amount"))
-            if row_amount:
-                held[row.get("location_id")] = (row.get("location_name", "?"), row_amount)
+            # Compare the real balance; rounding is for display only, so a request for exactly
+            # what is held is never refused and a shortfall is never rounded away.
+            if tidy_amount(row.get("amount")):
+                held[row.get("location_id")] = (
+                    row.get("location_name", "?"),
+                    float(row.get("amount")),
+                )
         have = held.get(location_id, (from_location, 0.0))[1]
-        if have < amount:
+        if have < amount - _AMOUNT_EPSILON:
             elsewhere = ", ".join(f"{n} {format_amount(a)}" for n, a in held.values()) or "none"
             raise GrocyValidationError(
                 f"Cannot consume {format_amount(amount)} of '{product}' from '{from_location}': "
@@ -345,7 +351,7 @@ async def stock_levels_data(
     """
     in_location: dict[int, float] | None = None
     if location is not None:
-        location_id = await resolve_location(client, location)
+        location_id = await _existing_location_id(client, location)
         in_location = {}
         for row in await client.get_objects("stock_current_locations"):
             if row.get("location_id") == location_id:
@@ -408,6 +414,16 @@ async def stock_levels_data(
     return result
 
 
+async def _existing_location_id(client: GrocyClient, location: str) -> int:
+    """Resolve a location name or ID and make sure it exists (IDs are not checked by resolve)."""
+    location_id = await resolve_location(client, location)
+    known = await client.get_objects("locations")
+    if not any(loc.get("id") == location_id for loc in known):
+        available = ", ".join(f"{loc.get('name')} ({loc.get('id')})" for loc in known) or "none"
+        raise GrocyValidationError(f"Unknown location '{location}'. Available: {available}.")
+    return location_id
+
+
 async def stock_by_location_data(
     client: GrocyClient,
     location: str | None = None,
@@ -423,7 +439,7 @@ async def stock_by_location_data(
         location: Location name or numeric ID; all locations when omitted.
         freezer_only: Keep only freezer locations.
     """
-    location_id = await resolve_location(client, location) if location is not None else None
+    location_id = await _existing_location_id(client, location) if location is not None else None
     rows = await client.get_objects("stock_current_locations")
     products = {p["id"]: p for p in await client.get_objects("products")}
     units = {u["id"]: u.get("name") for u in await client.get_objects("quantity_units")}

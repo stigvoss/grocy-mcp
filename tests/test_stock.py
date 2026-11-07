@@ -796,3 +796,46 @@ async def test_stock_consume_default_behaviour_unchanged(mock_client):
         await stock_consume(mock_client, "Milk", 1.0)
     mock_client.consume_stock.assert_called_once_with(1, 1.0)
     mock_client.get_stock_locations.assert_not_called()
+
+
+async def test_unknown_numeric_location_is_an_error_not_an_empty_result(mock_client):
+    from grocy_mcp.core.stock import stock_by_location_data, stock_levels_data
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    client = _location_client(mock_client)
+    for call in (
+        lambda: stock_by_location_data(client, location="999"),
+        lambda: stock_levels_data(client, location="999"),
+    ):
+        with pytest.raises(GrocyValidationError, match=r"Unknown location '999'.*Fridge \(2\)"):
+            await call()
+
+
+@pytest.mark.parametrize(
+    "held, requested, allowed",
+    [
+        (0.1234564, 0.1234564, True),  # exactly what is held is never refused
+        (1.9999996, 2.0, False),  # a shortfall is not rounded away
+        (0.9999999999999999, 1.0, True),  # float residue below the request is tolerated
+        (1.0, 1.0000001, False),
+    ],
+)
+async def test_stock_consume_from_location_compares_the_real_balance(
+    mock_client, held, requested, allowed
+):
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    mock_client.get_stock_locations.return_value = [
+        {"location_id": 4, "location_name": "Freezer", "amount": held}
+    ]
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+        patch("grocy_mcp.core.stock.resolve_location", return_value=4),
+    ):
+        if allowed:
+            await stock_consume(mock_client, "Beef", requested, from_location="Freezer")
+            mock_client.consume_stock.assert_called_once()
+        else:
+            with pytest.raises(GrocyValidationError, match="holds"):
+                await stock_consume(mock_client, "Beef", requested, from_location="Freezer")
+            mock_client.consume_stock.assert_not_called()
