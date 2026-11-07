@@ -37,7 +37,8 @@ async def stock_usage_stats_data(
     """Summarise a product's purchases, consumption and opens over the last ``days`` days.
 
     Built from the stock journal: undone bookings and rows that round to zero (float residue) are
-    ignored. Dates are the journal's creation timestamps. ``avg_daily_use`` is the amount
+    ignored. Dates are the journal's creation timestamps, which Grocy writes in its own local
+    time and which are read here as UTC, so they can be off by the server's UTC offset. ``avg_daily_use`` is the amount
     consumed (spoiled units excluded) divided by ``days``.
     """
     if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= _MAX_DAYS:
@@ -100,5 +101,7 @@ async def stock_usage_stats_data(
         },
         "average_daily_use": round(sum(abs(a) for _, _, a, _ in used) / days, 6),
         "last_movement": last_movement.isoformat() if last_movement else None,
-        "days_since_last_movement": (now - last_movement).days if last_movement else None,
+        # A booking made while the requests were in flight, or Grocy's clock being ahead of
+        # ours, can be newer than ``now``; that is "today", never a negative number of days.
+        "days_since_last_movement": max((now - last_movement).days, 0) if last_movement else None,
     }
