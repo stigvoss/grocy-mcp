@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `stock_journal_tool` rounds amounts and hides entries that round to zero (float residue such as
   2.2e-16 from opening or transferring), noting how many were hidden
+- `stock_levels_tool` rows include `amount_aggregated` (own stock plus child products) so parent
+  products with stocked children are not reported as out of stock
 - `entity_create_tool` and `entity_update_tool` translate Grocy constraint errors (missing required
   field, duplicate, unknown ID) into short messages instead of returning raw SQL errors
 - `stock_open_tool` returns a clear message (product, unopened and opened amounts) instead of a raw
