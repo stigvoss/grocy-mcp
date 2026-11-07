@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import math
 import weakref
+from dataclasses import dataclass
 
 from grocy_mcp.client import GrocyClient
 from grocy_mcp.core.products import is_truthy_value, userfield_contains
@@ -68,6 +69,19 @@ async def stock_expiring(client: GrocyClient) -> str:
         return "No expiring, expired, or missing products found."
 
     return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class StockOutcome:
+    """What a stock action did: ``ok`` is False when the request was not (fully) carried out.
+
+    ``partial`` means something was still changed (e.g. the stock total was adjusted but the
+    requested opened amount could not be reached), so the message is worth reading.
+    """
+
+    ok: bool
+    message: str
+    partial: bool = False
 
 
 _AMOUNT_EPSILON = 1e-9  # tolerance for float residue in the stock balance
@@ -264,17 +278,18 @@ async def stock_transfer(
     return f"Transferred {amount} of '{product}' to location '{to_location}'."
 
 
-async def stock_inventory(
+async def stock_inventory_outcome(
     client: GrocyClient,
     product: str,
     new_amount: float,
     opened_amount: float | None = None,
-) -> str:
-    """Set the stock amount for a product via inventory and report the opened/unopened split.
+) -> StockOutcome:
+    """Set the stock amount via inventory and report the opened/unopened split.
 
     Grocy removes opened units first when the amount goes down. With ``opened_amount`` the
     missing units are opened afterwards so the result matches the physical count. Grocy cannot
-    un-open units, so if more units are open than asked for, the result says so.
+    un-open units. ``ok`` is False (and ``partial`` True, since the total was still adjusted)
+    when the requested ``opened_amount`` could not be reached.
     """
     if opened_amount is not None and not (
         math.isfinite(opened_amount) and 0 <= opened_amount <= new_amount
@@ -306,11 +321,59 @@ async def stock_inventory(
                 f" {format_amount(opened)} are open but {format_amount(opened_amount)} were requested; "
                 "Grocy cannot un-open units."
             )
+        elif opened_amount is not None and opened < opened_amount and not note:
+            note = (
+                f" Only {format_amount(opened)} of the requested {format_amount(opened_amount)} "
+                "are opened."
+            )
 
-    return (
-        f"Inventory updated: '{product}' set to {new_amount} "
-        f"(unopened {format_amount(unopened)}, opened {format_amount(opened)}).{note}"
+    return StockOutcome(
+        ok=not note,
+        message=(
+            f"Inventory updated: '{product}' set to {new_amount} "
+            f"(unopened {format_amount(unopened)}, opened {format_amount(opened)}).{note}"
+        ),
+        partial=bool(note),
     )
+
+
+async def stock_inventory(
+    client: GrocyClient,
+    product: str,
+    new_amount: float,
+    opened_amount: float | None = None,
+) -> str:
+    """Set the stock amount for a product via inventory and report the opened/unopened split."""
+    return (await stock_inventory_outcome(client, product, new_amount, opened_amount)).message
+
+
+async def stock_open_outcome(
+    client: GrocyClient, product: str, amount: float = 1.0
+) -> StockOutcome:
+    """Mark stock as opened; ``ok`` is False when there is not enough unopened stock."""
+    product_id = await resolve_product(client, product)
+    info = await client.get_stock_product(product_id)
+    name = (info.get("product") or {}).get("name", f"Product {product_id}")
+    _, opened, unopened = _split_amounts(info)
+
+    if unopened < amount:
+        return StockOutcome(
+            False,
+            f"Cannot open {format_amount(amount)} of '{name}': unopened amount is "
+            f"{format_amount(unopened)} (already opened: {format_amount(opened)}). "
+            "Add stock first, or consume the opened amount.",
+        )
+
+    try:
+        await client.open_stock(product_id, amount)
+    except GrocyValidationError:
+        return StockOutcome(
+            False,
+            f"Grocy refused to open {format_amount(amount)} of '{name}' "
+            f"(unopened: {format_amount(unopened)}, opened: {format_amount(opened)}). "
+            "Check the product's stock and 'opened' settings.",
+        )
+    return StockOutcome(True, f"Opened {amount} of '{product}'.")
 
 
 async def stock_open(client: GrocyClient, product: str, amount: float = 1.0) -> str:
@@ -319,26 +382,7 @@ async def stock_open(client: GrocyClient, product: str, amount: float = 1.0) -> 
     Returns an explanatory message instead of calling Grocy when there is not enough unopened
     stock.
     """
-    product_id = await resolve_product(client, product)
-    info = await client.get_stock_product(product_id)
-    name = (info.get("product") or {}).get("name", f"Product {product_id}")
-    _, opened, unopened = _split_amounts(info)
-
-    if unopened < amount:
-        return (
-            f"Cannot open {format_amount(amount)} of '{name}': unopened amount is {format_amount(unopened)} "
-            f"(already opened: {format_amount(opened)}). Add stock first, or consume the opened amount."
-        )
-
-    try:
-        await client.open_stock(product_id, amount)
-    except GrocyValidationError:
-        return (
-            f"Grocy refused to open {format_amount(amount)} of '{name}' "
-            f"(unopened: {format_amount(unopened)}, opened: {format_amount(opened)}). "
-            "Check the product's stock and 'opened' settings."
-        )
-    return f"Opened {amount} of '{product}'."
+    return (await stock_open_outcome(client, product, amount)).message
 
 
 async def stock_levels_data(
