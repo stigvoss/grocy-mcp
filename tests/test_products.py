@@ -425,3 +425,14 @@ def test_names_beyond_the_dynamic_programme_limit_use_greedy_pairing():
     words = [f"word{chr(97 + i)}x" for i in range(17)]
     assert _words_similar(words, list(reversed(words)))
     assert not _words_similar(words, [f"zzz{i}" for i in range(17)])
+
+
+@pytest.mark.parametrize("key", ["", "   "])
+@pytest.mark.parametrize("filter_name", ["userfields_match", "userfields_contains"])
+async def test_blank_userfield_names_are_rejected_in_both_filters(
+    userfield_client, filter_name, key
+):
+    userfield_client.get_objects.reset_mock()
+    with pytest.raises(GrocyValidationError, match="non-blank userfield names"):
+        await products_list_data(userfield_client, **{filter_name: {key: "19753"}})
+    userfield_client.get_objects.assert_not_called()
