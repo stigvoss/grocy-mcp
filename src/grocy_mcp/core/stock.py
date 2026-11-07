@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from grocy_mcp.client import GrocyClient
 from grocy_mcp.core.products import is_truthy_value, userfield_contains
-from grocy_mcp.core.resolve import resolve_location, resolve_product
+from grocy_mcp.core.resolve import is_numeric_id, resolve_location, resolve_product
 from grocy_mcp.core.utils import format_amount, is_iso_date, tidy_amount, zero_rows_note
 from grocy_mcp.exceptions import GrocyError, GrocyNotFoundError, GrocyValidationError
 
@@ -468,7 +468,7 @@ async def stock_levels_data(
 
     group_id: int | None = None
     if product_group is not None:
-        if product_group.isdigit():
+        if is_numeric_id(product_group):
             group_id = int(product_group)
         else:
             groups = await client.get_objects("product_groups")

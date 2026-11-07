@@ -1168,3 +1168,35 @@ async def test_stock_inventory_rejects_a_non_finite_or_negative_target_before_an
             await stock_inventory(mock_client, "Milk", bad, **kwargs)
     mock_client.get_stock_product.assert_not_called()
     mock_client.inventory_stock.assert_not_called()
+
+
+class _FakeOpenClient(_FakeProductClient):
+    """One unopened pack; opening flips the entry to opened, like Grocy does."""
+
+    async def get_stock_product(self, product_id):
+        await asyncio.sleep(0)
+        return {
+            "product": {"name": "Beef"},
+            "stock_amount": self.entry["amount"],
+            "stock_amount_opened": self.entry["amount"] if self.entry["open"] else 0,
+        }
+
+    async def open_stock(self, product_id, amount):
+        await asyncio.sleep(0)
+        self.entry["open"] = 1
+
+
+async def test_opening_overlapping_a_price_only_edit_is_not_silently_undone():
+    from grocy_mcp.core.stock import stock_entry_edit, stock_open
+
+    for first in ("edit", "open"):
+        client = _FakeOpenClient(amount=1)
+        with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+            calls = {
+                "edit": stock_entry_edit(client, 24, price=9.5),
+                "open": stock_open(client, "Beef", 1.0),
+            }
+            order = ["edit", "open"] if first == "edit" else ["open", "edit"]
+            await asyncio.gather(*(calls[name] for name in order))
+        assert client.entry["open"] == 1, f"open was undone (started with {first})"
+        assert client.entry["price"] == 9.5
