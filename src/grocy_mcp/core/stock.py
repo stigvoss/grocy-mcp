@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
+from collections import defaultdict
 
 from grocy_mcp.client import GrocyClient
 from grocy_mcp.core.products import is_truthy_value
@@ -59,6 +61,9 @@ async def stock_expiring(client: GrocyClient) -> str:
         return "No expiring, expired, or missing products found."
 
     return "\n".join(lines)
+
+
+_inventory_locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 
 def _split_amounts(info: dict) -> tuple[float, float, float]:
@@ -206,22 +211,31 @@ async def stock_inventory(
         raise GrocyValidationError("opened_amount must be between 0 and new_amount.")
 
     product_id = await resolve_product(client, product)
-    total, _, _ = _split_amounts(await client.get_stock_product(product_id))
-    if total != new_amount:
-        # Grocy rejects an inventory that equals the current amount, so skip it in that case
-        await client.inventory_stock(product_id, new_amount)
-    total, opened, unopened = _split_amounts(await client.get_stock_product(product_id))
+    # Serialise the read/adjust/open sequence per product, so overlapping calls in this server
+    # cannot both read the same opened count and each open the missing units.
+    async with _inventory_locks[product_id]:
+        total, _, _ = _split_amounts(await client.get_stock_product(product_id))
+        if total != new_amount:
+            # Grocy rejects an inventory that equals the current amount, so skip it then
+            await client.inventory_stock(product_id, new_amount)
+        total, opened, unopened = _split_amounts(await client.get_stock_product(product_id))
 
-    note = ""
-    if opened_amount is not None:
-        if opened < opened_amount:
-            await client.open_stock(product_id, opened_amount - opened)
-            opened, unopened = opened_amount, max(total - opened_amount, 0.0)
-        elif opened > opened_amount:
-            note = (
-                f" {_fmt(opened)} are open but {_fmt(opened_amount)} were requested; "
-                "Grocy cannot un-open units."
-            )
+        note = ""
+        if opened_amount is not None:
+            if opened < opened_amount:
+                try:
+                    await client.open_stock(product_id, opened_amount - opened)
+                except GrocyValidationError:
+                    note = (
+                        f" The inventory was applied, but opening {_fmt(opened_amount - opened)} "
+                        f"more to reach {_fmt(opened_amount)} opened failed."
+                    )
+                total, opened, unopened = _split_amounts(await client.get_stock_product(product_id))
+            elif opened > opened_amount:
+                note = (
+                    f" {_fmt(opened)} are open but {_fmt(opened_amount)} were requested; "
+                    "Grocy cannot un-open units."
+                )
 
     return (
         f"Inventory updated: '{product}' set to {new_amount} "
