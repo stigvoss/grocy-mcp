@@ -76,3 +76,19 @@ def test_workflow_publishes_both_architectures_only_from_main_and_version_tags()
     for line in workflow.splitlines():
         if line.strip().startswith(("if:", "push:")):
             assert "github.event_name != 'pull_request'" not in line, line
+
+
+def test_release_tags_do_not_move_latest():
+    workflow = (ROOT / ".github" / "workflows" / "docker.yml").read_text()
+    # metadata-action adds `latest` to stable semver tags unless flavor says otherwise
+    assert re.search(r"flavor:\s*\|\s*\n\s*latest=false", workflow)
+    # and `latest` is still produced explicitly, for the default branch only
+    assert "type=raw,value=latest,enable={{is_default_branch}}" in workflow
+
+
+def test_readme_explains_that_the_image_namespace_is_the_repository_owner():
+    readme = (ROOT / "README.md").read_text()
+    section = readme.split("### Container image")[1].split("\n## ")[0]
+    flat = " ".join(section.split())
+    assert "ghcr.io/<owner>/grocy-mcp" in flat and "a fork publishes under its own owner" in flat
+    assert "a release tag does not move it" in flat

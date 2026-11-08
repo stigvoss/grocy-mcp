@@ -53,6 +53,10 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
+          # Without this, metadata-action also adds `latest` to every stable semver tag, so a
+          # release (even an old maintenance one) would move `latest`, which tracks main.
+          flavor: |
+            latest=false
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-,format=short

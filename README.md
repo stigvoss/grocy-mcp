@@ -103,9 +103,13 @@ No `command:` is needed; the default is
 `grocy-mcp --transport streamable-http --host 0.0.0.0 --port 8000 --path /mcp`. Pass other
 arguments as the `command:` to change it, or use `--entrypoint grocy` to run the CLI instead.
 
+The image is published under the owner of the repository that runs the workflow, so the name is
+`ghcr.io/<owner>/grocy-mcp`: `stigvoss` for this repository, and a fork publishes under its own
+owner. Replace the owner in the example if you use a fork.
+
 | Tag | Meaning |
 | --- | --- |
-| `latest` | the current `main` |
+| `latest` | the current `main` (a release tag does not move it) |
 | `sha-<short commit>` | one specific commit, for pinning (e.g. `sha-cc4eec1`) |
 | `1.2.3`, `1.2` | a released `v1.2.3` tag |
 
