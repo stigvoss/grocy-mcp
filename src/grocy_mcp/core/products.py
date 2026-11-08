@@ -339,10 +339,12 @@ async def product_create_data(
         "location": place["name"],
         "product_group": group["name"] if group else None,
     }
-    if userfields:
+    # None means "not known": there is nothing to set (or to unset) on a new product
+    to_set = {k: v for k, v in (userfields or {}).items() if v is not None}
+    if to_set:
         try:
-            await client.update_userfields("products", product_id, userfields)
-            result["userfields_set"] = sorted(userfields)
+            await client.update_userfields("products", product_id, to_set)
+            result["userfields_set"] = sorted(to_set)
         except GrocyError as error:
             result["warning"] = (
                 f"Product {product_id} was created, but the userfields could not be saved or "

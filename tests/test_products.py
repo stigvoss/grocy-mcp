@@ -636,4 +636,7 @@ async def test_scalar_userfield_values_are_accepted(create_client):
     values = {"text": "a", "flag": True, "count": 3, "ratio": 1.5, "empty": None}
     result = await product_create_data(create_client, "Thing", "Pack", "Fridge", userfields=values)
     assert result["created"] is True
-    create_client.update_userfields.assert_awaited_once_with("products", 77, values)
+    # None means "not known" and is not sent
+    expected = {k: v for k, v in values.items() if v is not None}
+    create_client.update_userfields.assert_awaited_once_with("products", 77, expected)
+    assert result["userfields_set"] == sorted(expected)

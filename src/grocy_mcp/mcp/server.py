@@ -229,7 +229,7 @@ def create_mcp_server() -> FastMCP:
         product_group: str | None = None,
         default_best_before_days: int | None = None,
         min_stock_amount: float | None = None,
-        userfields: dict[str, str | int | float | bool] | None = None,
+        userfields: dict[str, str | int | float | bool | None] | None = None,
         force: bool = False,
     ) -> dict:
         """Create a complete product in one call, checking unit, location and duplicates.
@@ -248,7 +248,8 @@ def create_mcp_server() -> FastMCP:
             default_best_before_days: Optional default best-before days (-1 = never expires).
             min_stock_amount: Optional minimum stock amount.
             userfields: Optional {userfield: value}, e.g. {"bilkatogo_ids": "19753",
-                        "ai_notes": "...", "high_churn": 1}.
+                        "ai_notes": "...", "high_churn": 1}. A null value means "not known"
+                        and is skipped.
             force: Create even if a near-duplicate name exists.
         """
         async with _get_client() as client:

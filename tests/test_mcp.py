@@ -233,3 +233,77 @@ async def test_file_download_tool_returns_base64(monkeypatch):
 async def test_new_tools_are_registered():
     tools = {t.name for t in await create_mcp_server().list_tools()}
     assert {"products_list_tool", "stock_levels_tool"} <= tools
+
+
+def _product_client(calls):
+    class Client:
+        instance = "http://grocy-test/api"
+
+        async def get_objects(self, entity, query=None):
+            return {
+                "quantity_units": [{"id": 3, "name": "Pack"}],
+                "locations": [{"id": 2, "name": "Fridge"}],
+                "product_groups": [],
+                "products": [],
+            }[entity]
+
+        async def create_object(self, entity, data):
+            calls.append(("create", data["name"]))
+            return "77"
+
+        async def update_userfields(self, entity, obj_id, data):
+            calls.append(("userfields", obj_id, data))
+
+    return Client()
+
+
+async def test_product_create_tool_accepts_null_userfield_values_and_skips_them(monkeypatch):
+    mcp = create_mcp_server()
+    calls = []
+
+    @asynccontextmanager
+    async def fake_client():
+        yield _product_client(calls)
+
+    monkeypatch.setattr("grocy_mcp.mcp.server._get_client", fake_client)
+
+    result = await mcp.call_tool(
+        "product_create_tool",
+        {
+            "name": "Skyr natural",
+            "stock_unit": "Pack",
+            "location": "Fridge",
+            "userfields": {"ai_notes": None, "bilkatogo_ids": "19753", "bilkatogo": None},
+        },
+    )
+
+    payload = result.structured_content
+    assert payload["created"] is True and payload["userfields_set"] == ["bilkatogo_ids"]
+    assert ("userfields", 77, {"bilkatogo_ids": "19753"}) in calls
+
+
+async def test_product_create_tool_with_only_null_userfields_makes_no_userfield_request(
+    monkeypatch,
+):
+    mcp = create_mcp_server()
+    calls = []
+
+    @asynccontextmanager
+    async def fake_client():
+        yield _product_client(calls)
+
+    monkeypatch.setattr("grocy_mcp.mcp.server._get_client", fake_client)
+
+    result = await mcp.call_tool(
+        "product_create_tool",
+        {
+            "name": "Plain thing",
+            "stock_unit": "Pack",
+            "location": "Fridge",
+            "userfields": {"ai_notes": None},
+        },
+    )
+
+    payload = result.structured_content
+    assert payload["created"] is True and "userfields_set" not in payload
+    assert not [c for c in calls if c[0] == "userfields"]
