@@ -1,0 +1,25 @@
+# Keep the build context to what the image needs: pyproject.toml, README.md and src/.
+.git
+.github
+.venv
+venv
+.pytest_cache
+.ruff_cache
+__pycache__
+*.py[cod]
+*.egg-info
+dist
+build
+tests
+testbed
+docs
+.idea
+.vscode
+.DS_Store
+config.toml
+CLAUDE.md
+AGENTS.md
+CHANGELOG.md
+CONTRIBUTING.md
+ROADMAP.md
+SUPPORT.md

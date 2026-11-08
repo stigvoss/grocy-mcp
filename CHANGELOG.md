@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Container image**: a `Dockerfile` and a workflow that build and publish a multi-architecture
+  (`linux/amd64`, `linux/arm64`) image to `ghcr.io/<owner>/grocy-mcp` on pushes to `main` (tags
+  `latest` and `sha-<commit>`) and on `v*` tags (`X.Y.Z`, `X.Y`); pull requests only build and
+  smoke-test it. The image runs the server over streamable HTTP on port 8000 as a non-root user.
 - **Product creation**: `product_create_tool` creates a complete product in one call (name, stock
   unit and default location by name or ID and checked to exist, optional group, best-before days,
   minimum stock and userfields) and returns near-duplicate candidates instead of creating unless

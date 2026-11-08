@@ -1,0 +1,111 @@
+name: Container image
+
+# Builds the image for linux/amd64 and linux/arm64. Pull requests that touch the image only build
+# it (nothing is published); pushes to main and version tags publish it to the GitHub Container
+# Registry as ghcr.io/<owner>/grocy-mcp.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - pyproject.toml
+      - README.md
+      - src/**
+      - .github/workflows/docker.yml
+  workflow_dispatch:
+
+concurrency:
+  group: container-image-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image name, tags and labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      # Build a single-platform copy first and run it, so a broken image fails here and is never
+      # pushed. The multi-platform build below reuses the layer cache from this one.
+      - name: Build for the smoke test
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: grocy-mcp:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint grocy-mcp grocy-mcp:smoke --help > /dev/null
+          docker run --rm --entrypoint grocy grocy-mcp:smoke --help > /dev/null
+          test "$(docker run --rm --entrypoint id grocy-mcp:smoke -u)" != "0"
+          docker run -d --name smoke -p 8000:8000 grocy-mcp:smoke
+          status=000
+          for _ in $(seq 1 20); do
+            status="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/mcp || true)"
+            [ "$status" != "000" ] && break
+            sleep 1
+          done
+          docker logs smoke
+          docker rm -f smoke > /dev/null
+          echo "GET /mcp answered HTTP $status"
+          # a bare GET is not a valid MCP request, but any HTTP answer means the server is up
+          [ "$status" != "000" ]
+
+      - name: Build${{ github.event_name != 'pull_request' && ' and push' || '' }} (amd64, arm64)
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        if: github.event_name != 'pull_request'
+        run: |
+          {
+            echo "### Published image"
+            echo
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo "Digest: \`${{ steps.build.outputs.digest }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
