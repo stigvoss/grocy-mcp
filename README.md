@@ -265,8 +265,10 @@ grocy-mcp tools together:
 
 Entry IDs are **not stable**: any booking (transfer, consume, open, inventory, undo, or another
 edit) can replace or split entries, and undoing a consume brings the unit back as a *new* entry.
-List the entries again right before every edit instead of reusing an ID. An edit of an entry that
-changed since it was read is refused and nothing is written. Both tools rewrite history, so
+List the entries again right before every edit instead of reusing an ID. The edit tool reads the
+entry itself and refuses to write (nothing is written) if it changes *while the edit is in
+progress*; it cannot know what you saw when you listed it, so an entry that kept its ID but changed
+since your listing would receive a correction based on the old view. Both tools rewrite history, so
 confirm with the user first.
 
 ### "Add a new recipe from a description"
