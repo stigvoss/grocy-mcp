@@ -83,8 +83,16 @@ class GrocyClient:
 
     @staticmethod
     def _raise_for_status(resp: httpx.Response) -> None:
-        if resp.status_code < 400:
+        if resp.status_code < 300:
             return
+        if resp.status_code < 400:
+            # Redirects are not followed, so the request was not executed. Treating one as a
+            # success would report an unexecuted write as applied.
+            raise GrocyServerError(
+                f"Grocy answered {resp.status_code} with a redirect to "
+                f"{resp.headers.get('location', '?')}, so the request was not executed. Check "
+                "GROCY_URL (http vs https, path prefix) and any login proxy in front of Grocy."
+            )
         body = resp.text
         match resp.status_code:
             case 401 | 403:
