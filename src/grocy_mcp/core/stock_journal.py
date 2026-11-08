@@ -29,8 +29,11 @@ async def stock_journal(client: GrocyClient, product: str | None = None) -> str:
     hidden = len(entries) - len(visible)
     entries = visible
 
-    # Sort by row_created_timestamp descending, take last 50
-    entries.sort(key=lambda e: e.get("row_created_timestamp", ""), reverse=True)
+    # Newest first. Bookings made within the same second share a timestamp, and a reverse sort
+    # keeps equal items in their original (oldest-first) order, so break ties by booking ID.
+    entries.sort(
+        key=lambda e: (e.get("row_created_timestamp") or "", int(e.get("id") or 0)), reverse=True
+    )
     entries = entries[:50]
 
     lines = ["Stock journal (most recent first):"]
@@ -39,8 +42,11 @@ async def stock_journal(client: GrocyClient, product: str | None = None) -> str:
         tidy = tidy_amount(entry.get("amount"))
         amount = format_amount(tidy) if tidy is not None else entry.get("amount", "?")
         txn_type = entry.get("transaction_type", "?")
+        spoiled = " (spoiled)" if int(entry.get("spoiled") or 0) else ""
         timestamp = entry.get("row_created_timestamp", "?")
-        lines.append(f"  [{entry.get('id', '?')}] {prod_name} — {txn_type} {amount} — {timestamp}")
+        lines.append(
+            f"  [{entry.get('id', '?')}] {prod_name} — {txn_type} {amount}{spoiled} — {timestamp}"
+        )
 
     if hidden:
         lines.append(f"  ({hidden} zero-amount entr{'y' if hidden == 1 else 'ies'} hidden)")

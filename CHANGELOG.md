@@ -48,6 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `stock_journal_tool` lists bookings made in the same second newest-first (ties are broken by
+  booking ID, which also keeps the newest 50 when many share a second) and marks spoiled consumes
+  with `(spoiled)`
 - Amounts in `stock_levels_tool`, `stock_overview_tool`, `stock_product_info_tool` and
   `entity_list_tool stock_current_locations` are rounded to 6 decimals (no more
   `1.0000000000000007`); overview and current-locations rows that round to zero are hidden with a
