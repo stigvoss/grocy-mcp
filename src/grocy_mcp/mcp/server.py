@@ -857,8 +857,10 @@ def create_mcp_server() -> FastMCP:
         """View recent stock transaction history.
 
         Shows the 50 most recent stock changes (purchases, consumption,
-        transfers, inventory corrections). Optionally filter by product. The number in
-        brackets on each line is the booking ID that stock_undo_tool takes.
+        transfers, inventory corrections), newest first (bookings in the same second are
+        ordered by booking ID). Spoiled consumes are marked "(spoiled)". Optionally filter by
+        product. The number in brackets on each line is the booking ID that stock_undo_tool
+        takes.
 
         Args:
             product: Optional product name or ID to filter by.
