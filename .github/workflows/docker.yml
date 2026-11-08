@@ -26,6 +26,7 @@ concurrency:
 jobs:
   image:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
@@ -83,7 +84,7 @@ jobs:
           docker run -d --name smoke -p 8000:8000 grocy-mcp:smoke
           status=000
           for _ in $(seq 1 20); do
-            status="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/mcp || true)"
+            status="$(curl -s --connect-timeout 2 --max-time 3 -o /dev/null -w '%{http_code}' http://localhost:8000/mcp || true)"
             [ "$status" != "000" ] && break
             sleep 1
           done

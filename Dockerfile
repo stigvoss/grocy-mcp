@@ -4,7 +4,8 @@
 FROM python:3.12-slim AS build
 WORKDIR /src
 RUN pip install --no-cache-dir build
-COPY pyproject.toml README.md ./
+# LICENSE goes into the wheel (dist-info/licenses) as well as into the image, see below
+COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 RUN python -m build --wheel --outdir /dist
 
@@ -17,6 +18,9 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 RUN useradd --system --create-home --uid 10001 --shell /usr/sbin/nologin grocy
+
+# The MIT licence requires its notice to accompany copies of the software
+COPY LICENSE /licenses/LICENSE
 
 COPY --from=build /dist/*.whl /tmp/wheels/
 RUN pip install /tmp/wheels/*.whl && rm -rf /tmp/wheels

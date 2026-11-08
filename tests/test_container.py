@@ -60,7 +60,7 @@ def test_dockerignore_keeps_everything_the_wheel_build_copies():
     }
     copied = re.findall(r"^COPY (?!--from)(.+?)\s+\S+$", DOCKERFILE, flags=re.MULTILINE)
     needed = {path.strip("./") or "." for line in copied for path in line.split()}
-    assert needed >= {"pyproject.toml", "README.md", "src"}
+    assert needed >= {"pyproject.toml", "README.md", "LICENSE", "src"}
     assert not (needed & ignored), f"in both COPY and .dockerignore: {needed & ignored}"
 
 
@@ -92,3 +92,19 @@ def test_readme_explains_that_the_image_namespace_is_the_repository_owner():
     flat = " ".join(section.split())
     assert "ghcr.io/<owner>/grocy-mcp" in flat and "a fork publishes under its own owner" in flat
     assert "a release tag does not move it" in flat
+
+
+def test_image_carries_the_licence_notice():
+    # in the wheel (copied into the build stage) and in a plain, well-known place in the runtime
+    assert re.search(r"^COPY pyproject\.toml README\.md LICENSE \./$", DOCKERFILE, re.MULTILINE)
+    assert "COPY LICENSE /licenses/LICENSE" in DOCKERFILE
+    assert "LICENSE" not in (ROOT / ".dockerignore").read_text()
+
+
+def test_every_curl_in_the_smoke_test_has_its_own_time_limit():
+    workflow = (ROOT / ".github" / "workflows" / "docker.yml").read_text()
+    curls = [line for line in workflow.splitlines() if "curl " in line and "http" in line]
+    assert curls, "the smoke test should probe the server with curl"
+    for line in curls:
+        assert "--max-time" in line, line
+    assert "timeout-minutes:" in workflow  # and the job as a whole is bounded
