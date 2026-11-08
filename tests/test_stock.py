@@ -918,6 +918,34 @@ async def test_stock_entries_lists_ids_and_location_names(mock_client):
     assert [r["entry_id"] for r in freezer] == [25]
 
 
+async def test_stock_search_matches_userfields_when_asked(mock_client):
+    async def get_objects(entity, query=None):
+        return {
+            "products": [
+                {
+                    "id": 1,
+                    "name": "Minced beef",
+                    "userfields": {
+                        "bilkatogo": "https://x/search?query=hakket%20oksek%C3%B8d",
+                        "ai_notes": "",
+                    },
+                },
+                {"id": 2, "name": "Milk", "userfields": {"ai_notes": "mælk"}},
+            ],
+            "product_barcodes": [],
+        }[entity]
+
+    mock_client.get_objects.side_effect = get_objects
+    assert "No products found" in await stock_search(mock_client, "hakket")
+    result = await stock_search(mock_client, "hakket", include_userfields=True)
+    assert "[1] Minced beef (userfield: bilkatogo)" in result
+    assert "Milk" not in result
+    assert "[1] Minced beef" in await stock_search(mock_client, "oksekød", include_userfields=True)
+    # name matches are not tagged and are not duplicated
+    both = await stock_search(mock_client, "minced", include_userfields=True)
+    assert both.count("Minced beef") == 1 and "userfield" not in both
+
+
 async def test_unknown_numeric_location_is_an_error_not_an_empty_result(mock_client):
     from grocy_mcp.core.stock import stock_by_location_data, stock_levels_data
     from grocy_mcp.exceptions import GrocyValidationError
@@ -995,6 +1023,25 @@ async def test_stock_entry_edit_overlapping_edits_do_not_overwrite_each_other():
         stock_entry_edit(client, 24, price=9.5),
     )
     assert client.entry["amount"] == 5 and client.entry["price"] == 9.5
+
+
+async def test_stock_search_finds_encoded_uppercase_in_userfields(mock_client):
+    async def get_objects(entity, query=None):
+        return {
+            "products": [
+                {
+                    "id": 1,
+                    "name": "Beef",
+                    "userfields": {"bilkatogo": "https://x/?query=OKSEK%C3%98D"},
+                }
+            ],
+            "product_barcodes": [],
+        }[entity]
+
+    mock_client.get_objects.side_effect = get_objects
+    assert "[1] Beef (userfield: bilkatogo)" in await stock_search(
+        mock_client, "oksekød", include_userfields=True
+    )
 
 
 async def test_stock_consume_error_hides_noise_rows_but_lists_real_ones(mock_client):
@@ -1160,3 +1207,41 @@ async def test_entry_edit_writes_when_the_entry_is_unchanged(mock_client):
     mock_client.get_stock_entry.return_value = _entry(amount=2)
     await stock_entry_edit(mock_client, 24, price=9.5)
     mock_client.update_stock_entry.assert_awaited_once()
+
+
+async def test_stock_search_with_many_userfield_matches_keeps_order_and_has_no_duplicates(
+    mock_client,
+):
+    products = [
+        {"id": i, "name": f"Item {i}", "userfields": {"bilkatogo": "https://shop/x"}}
+        for i in range(1, 2001)
+    ]
+    products[4]["name"] = "https cheese"  # matched by name and by userfield
+    barcodes = [{"product_id": 7, "barcode": "https-123"}]  # matched by barcode and userfield
+
+    async def get_objects(entity, query=None):
+        return {"products": products, "product_barcodes": barcodes}[entity]
+
+    mock_client.get_objects.side_effect = get_objects
+    result = await stock_search(mock_client, "https", include_userfields=True)
+    ids = [int(line.split("]")[0].split("[")[1]) for line in result.splitlines()[1:]]
+    assert len(ids) == len(set(ids)) == 2000
+    assert ids[0] == 5  # the name match comes first, then the rest in product order
+    assert result.count("[7] Item 7") == 1
+
+
+async def test_stock_search_userfield_scan_is_linear_not_quadratic(mock_client):
+    import time
+
+    products = [
+        {"id": i, "name": f"P{i}", "userfields": {"link": "https://shop"}} for i in range(1, 6001)
+    ]
+
+    async def get_objects(entity, query=None):
+        return {"products": products, "product_barcodes": []}[entity]
+
+    mock_client.get_objects.side_effect = get_objects
+    start = time.perf_counter()
+    result = await stock_search(mock_client, "https", include_userfields=True)
+    assert result.count("\n") == 6000
+    assert time.perf_counter() - start < 3.0  # ~18 million dict comparisons would not fit
