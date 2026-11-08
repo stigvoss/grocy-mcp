@@ -48,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `stock_inventory_tool` (and the `inventory` batch action) names the locations that lost stock on a
+  decrease and explains how Grocy picks units (opened first, then earliest best-before, then
+  earliest purchase date, regardless of location); the tool description points to
+  `stock_consume_tool` with `from_location` for taking from a specific location
 - The descriptions of `stock_entries_tool`, `stock_entry_edit_tool` and `stock_undo_tool`, and a new
   README example, say that stock entry IDs are not stable (transfers, inventory, opening, undo and
   edits can replace or split entries) and that entries should be listed again before editing

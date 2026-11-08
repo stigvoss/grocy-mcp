@@ -525,6 +525,10 @@ class _FakeStockClient:
         self.opened = max(self.opened - removed, 0)
         self.total = new_amount
 
+    async def get_stock_locations(self, product_id):
+        await asyncio.sleep(0)
+        return [{"location_id": 2, "location_name": "Fridge", "amount": self.total}]
+
     async def open_stock(self, product_id, amount):
         await asyncio.sleep(0)
         self.open_calls.append(amount)
@@ -1258,3 +1262,225 @@ async def test_stock_search_userfield_scan_is_linear_not_quadratic(mock_client):
     result = await stock_search(mock_client, "https", include_userfields=True)
     assert result.count("\n") == 6000
     assert time.perf_counter() - start < 3.0  # ~18 million dict comparisons would not fit
+
+
+def _rows(**amounts):
+    ids = {"Fridge": 2, "Pantry": 3, "Freezer": 4}
+    return [
+        {"location_id": ids[name], "location_name": name, "amount": amount}
+        for name, amount in amounts.items()
+    ]
+
+
+async def test_inventory_decrease_across_locations_names_where_stock_was_removed(mock_client):
+    mock_client.get_stock_product.side_effect = [
+        {"stock_amount": 4, "stock_amount_opened": 0},
+        {"stock_amount": 3, "stock_amount_opened": 0},
+    ]
+    mock_client.get_stock_locations.side_effect = [
+        _rows(Fridge=1, Freezer=3),
+        _rows(Freezer=3),
+    ]
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await stock_inventory(mock_client, "Beef", 3.0)
+    assert "Stock removed from: Fridge 1." in result
+    assert "Grocy chose these units itself" in result
+    assert "opened first, then the earliest best-before date" in result
+    assert "stock_consume_tool with from_location" in result
+
+
+async def test_inventory_decrease_within_one_location_names_it_without_the_long_hint(mock_client):
+    mock_client.get_stock_product.side_effect = [
+        {"stock_amount": 4, "stock_amount_opened": 0},
+        {"stock_amount": 3, "stock_amount_opened": 0},
+    ]
+    mock_client.get_stock_locations.side_effect = [_rows(Fridge=4), _rows(Fridge=3)]
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await stock_inventory(mock_client, "Beef", 3.0)
+    assert "Stock removed from: Fridge 1." in result
+    assert "Grocy chose" not in result
+
+
+async def test_inventory_that_removes_from_several_locations_lists_all_of_them(mock_client):
+    mock_client.get_stock_product.side_effect = [
+        {"stock_amount": 5, "stock_amount_opened": 0},
+        {"stock_amount": 2, "stock_amount_opened": 0},
+    ]
+    mock_client.get_stock_locations.side_effect = [
+        _rows(Fridge=2, Pantry=1, Freezer=2),
+        _rows(Freezer=2),
+    ]
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await stock_inventory(mock_client, "Beef", 2.0)
+    assert "Stock removed from: Fridge 2, Pantry 1." in result
+
+
+async def test_inventory_increase_or_no_change_reports_nothing_removed_and_skips_the_lookup(
+    mock_client,
+):
+    for total, new in ((2, 5.0), (3, 3.0)):
+        mock_client.reset_mock()
+        mock_client.get_stock_product.side_effect = [
+            {"stock_amount": total, "stock_amount_opened": 0},
+            {"stock_amount": new, "stock_amount_opened": 0},
+        ]
+        with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+            result = await stock_inventory(mock_client, "Beef", new)
+        assert "removed" not in result
+        mock_client.get_stock_locations.assert_not_called()
+
+
+async def test_inventory_removal_report_ignores_float_noise_rows(mock_client):
+    mock_client.get_stock_product.side_effect = [
+        {"stock_amount": 2, "stock_amount_opened": 0},
+        {"stock_amount": 1, "stock_amount_opened": 0},
+    ]
+    mock_client.get_stock_locations.side_effect = [
+        _rows(Fridge=2, Pantry=4.4408920985006e-16),
+        _rows(Fridge=1, Pantry=2.2204460492503e-16),
+    ]
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await stock_inventory(mock_client, "Beef", 1.0)
+    assert "Stock removed from: Fridge 1." in result and "Pantry" not in result
+    assert "Grocy chose" not in result  # only one real location
+
+
+async def test_failing_location_read_after_the_write_keeps_the_confirmed_inventory(mock_client):
+    from grocy_mcp.core.stock import stock_inventory_outcome
+    from grocy_mcp.exceptions import GrocyServerError
+
+    mock_client.get_stock_product.return_value = {"stock_amount": 3, "stock_amount_opened": 0}
+    mock_client.get_stock_locations.side_effect = [
+        _rows(Fridge=3),
+        GrocyServerError("Server error (500): down"),
+    ]
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        outcome = await stock_inventory_outcome(mock_client, "Beef", 2.0)
+    mock_client.inventory_stock.assert_awaited_once()
+    assert outcome.ok is False and outcome.partial is True and "stock set to 2" in outcome.message
+
+
+async def test_failing_location_read_before_any_write_is_an_ordinary_failure(mock_client):
+    from grocy_mcp.core.stock import stock_inventory_outcome
+    from grocy_mcp.exceptions import GrocyServerError
+
+    mock_client.get_stock_product.return_value = {"stock_amount": 3, "stock_amount_opened": 0}
+    mock_client.get_stock_locations.side_effect = GrocyServerError("Server error (500): down")
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+        pytest.raises(GrocyServerError),
+    ):
+        await stock_inventory_outcome(mock_client, "Beef", 2.0)
+    mock_client.inventory_stock.assert_not_called()
+
+
+async def test_inventory_report_follows_location_ids_not_names(mock_client):
+    # location 2 is renamed between the two reads; nothing was removed there
+    mock_client.get_stock_product.side_effect = [
+        {"stock_amount": 4, "stock_amount_opened": 0},
+        {"stock_amount": 3, "stock_amount_opened": 0},
+    ]
+    mock_client.get_stock_locations.side_effect = [
+        [
+            {"location_id": 2, "location_name": "Fridge", "amount": 1},
+            {"location_id": 4, "location_name": "Freezer", "amount": 3},
+        ],
+        [
+            {"location_id": 2, "location_name": "Cold room", "amount": 1},
+            {"location_id": 4, "location_name": "Freezer", "amount": 2},
+        ],
+    ]
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await stock_inventory(mock_client, "Beef", 3.0)
+    assert "Stock removed from: Freezer 1." in result
+    assert "Fridge" not in result and "Cold room" not in result
+
+
+class _RacingStock:
+    """Stateful stock for one product, with await points so calls can really interleave."""
+
+    def __init__(self):
+        self.stock = {2: ["Fridge", 1.0], 4: ["Freezer", 3.0]}  # id -> [name, amount]
+        self.removed = asyncio.Event()
+
+    @property
+    def total(self):
+        return sum(a for _, a in self.stock.values())
+
+    async def get_stock_product(self, product_id):
+        await asyncio.sleep(0)
+        return {"product": {"name": "Beef"}, "stock_amount": self.total, "stock_amount_opened": 0}
+
+    async def get_stock_locations(self, product_id):
+        await asyncio.sleep(0)
+        return [
+            {"location_id": i, "location_name": n, "amount": a}
+            for i, (n, a) in self.stock.items()
+            if a
+        ]
+
+    async def inventory_stock(self, product_id, new_amount):
+        await asyncio.sleep(0)
+        self.stock[2][1] = 0.0  # Grocy picks the Fridge unit
+        self.removed.set()
+        # give an unlocked add the chance to land right here, before the second snapshot
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    async def add_stock(self, product_id, amount, **kwargs):
+        await self.removed.wait()  # the add arrives just after the removal
+        self.stock[kwargs.get("location_id", 2)][1] += amount
+
+
+async def test_a_concurrent_add_cannot_hide_the_inventory_removal_report():
+    grocy = _RacingStock()
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+        patch("grocy_mcp.core.stock.resolve_location", return_value=2),
+    ):
+        result, _ = await asyncio.gather(
+            stock_inventory(grocy, "Beef", 3.0),
+            stock_add(grocy, "Beef", 1.0, location_id=2),
+        )
+    assert "Stock removed from: Fridge 1." in result
+    assert grocy.stock[2][1] == 1.0  # the add really happened, after the inventory
+
+
+def test_the_add_lock_is_what_keeps_the_report_intact():
+    # negative control: without the lock the add lands between the snapshots and the report vanishes
+    import contextlib
+
+    from grocy_mcp.core import stock as stock_module
+
+    @contextlib.asynccontextmanager
+    async def no_lock():
+        yield
+
+    async def scenario():
+        grocy = _RacingStock()
+        with (
+            patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+            patch("grocy_mcp.core.stock.resolve_location", return_value=2),
+            patch.object(stock_module, "_product_lock", lambda pid: no_lock()),
+        ):
+            result, _ = await asyncio.gather(
+                stock_inventory(grocy, "Beef", 3.0),
+                stock_add(grocy, "Beef", 1.0, location_id=2),
+            )
+        return result
+
+    assert "Stock removed from" not in asyncio.run(scenario())  # the race really exists
+
+
+async def test_intake_apply_adds_under_the_product_lock():
+    from grocy_mcp.core.stock import product_lock
+    from grocy_mcp.core.workflows import workflow_stock_intake_apply_data
+
+    events = []
+
+    class Client:
+        async def add_stock(self, product_id, amount, **kwargs):
+            events.append(("add", product_lock(product_id).locked()))
+
+    await workflow_stock_intake_apply_data(Client(), [{"product_id": 7, "amount": 1}])
+    assert events == [("add", True)]  # the lock was held while the add ran

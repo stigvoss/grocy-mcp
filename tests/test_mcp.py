@@ -334,3 +334,10 @@ def test_readme_documents_correcting_stock_and_unstable_entry_ids():
     # it must not promise protection against changes made before the edit call started
     flat = " ".join(section.split())
     assert "while the edit is in progress" in flat and "cannot know what you saw" in flat
+
+
+async def test_inventory_tool_description_explains_how_grocy_picks_units():
+    tools = {t.name: (t.description or "") for t in await create_mcp_server().list_tools()}
+    text = " ".join(tools["stock_inventory_tool"].split())
+    assert "opened ones first" in text and "earliest best-before date" in text
+    assert "a location cannot be given" in text and "stock_consume_tool" in text

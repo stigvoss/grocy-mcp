@@ -292,6 +292,12 @@ async def test_unreadable_json_becomes_a_grocy_server_error(client, mock_api):
 async def test_inventory_then_unreadable_details_reports_a_partial_not_a_crash(client, mock_api):
     from grocy_mcp.core.stock import stock_inventory_outcome
 
+    mock_api.get("/stock/products/1/locations").mock(
+        side_effect=[
+            httpx.Response(200, json=[{"location_id": 2, "location_name": "Fridge", "amount": 3}]),
+            httpx.Response(200, json=[{"location_id": 2, "location_name": "Fridge", "amount": 2}]),
+        ]
+    )
     mock_api.get("/stock/products/1").mock(
         side_effect=[
             httpx.Response(200, json={"stock_amount": 3, "stock_amount_opened": 0}),
@@ -348,6 +354,12 @@ async def test_reads_and_create_still_require_a_readable_body(client, mock_api):
 async def test_acknowledged_inventory_with_unreadable_body_is_recorded_as_applied(client, mock_api):
     from grocy_mcp.core.stock import stock_inventory_outcome
 
+    mock_api.get("/stock/products/1/locations").mock(
+        side_effect=[
+            httpx.Response(200, json=[{"location_id": 2, "location_name": "Fridge", "amount": 3}]),
+            httpx.Response(200, json=[{"location_id": 2, "location_name": "Fridge", "amount": 2}]),
+        ]
+    )
     mock_api.get("/stock/products/1").mock(
         side_effect=[
             httpx.Response(200, json={"stock_amount": 3, "stock_amount_opened": 0}),
