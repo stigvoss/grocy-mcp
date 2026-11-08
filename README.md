@@ -82,6 +82,40 @@ Or run without a permanent install:
 uvx grocy-mcp --transport stdio
 ```
 
+### Container image
+
+A multi-architecture image (`linux/amd64` and `linux/arm64`) is published to the GitHub Container
+Registry on every push to `main` and for every `v*` tag. It runs the MCP server over streamable
+HTTP on port 8000 at `/mcp`, as a non-root user, and reads the same environment variables as the
+rest of the project.
+
+```yaml
+services:
+  grocy-mcp:
+    image: ghcr.io/stigvoss/grocy-mcp:latest
+    environment:
+      - GROCY_URL=http://grocy:80
+      - GROCY_API_KEY=${GROCY_MCP_API_KEY}
+    restart: unless-stopped
+```
+
+No `command:` is needed; the default is
+`grocy-mcp --transport streamable-http --host 0.0.0.0 --port 8000 --path /mcp`. Pass other
+arguments as the `command:` to change it, or use `--entrypoint grocy` to run the CLI instead.
+
+The image is published under the owner of the repository that runs the workflow, so the name is
+`ghcr.io/<owner>/grocy-mcp`: `stigvoss` for this repository, and a fork publishes under its own
+owner. Replace the owner in the example if you use a fork.
+
+| Tag | Meaning |
+| --- | --- |
+| `latest` | the current `main` (a release tag does not move it) |
+| `sha-<short commit>` | one specific commit, for pinning (e.g. `sha-cc4eec1`) |
+| `1.2.3`, `1.2` | a released `v1.2.3` tag |
+
+Pull requests that touch the image build it for both architectures and smoke-test it, but publish
+nothing. To build the image yourself: `docker build -t grocy-mcp .`.
+
 ## Quick start
 
 ### 1. Configure access to Grocy
