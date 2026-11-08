@@ -48,6 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The descriptions of `stock_entries_tool`, `stock_entry_edit_tool` and `stock_undo_tool`, and a new
+  README example, say that stock entry IDs are not stable (transfers, inventory, opening, undo and
+  edits can replace or split entries) and that entries should be listed again before editing
 - `stock_journal_tool` lists bookings made in the same second newest-first (ties are broken by
   booking ID, which also keeps the newest 50 when many share a second) and marks spoiled consumes
   with `(spoiled)`

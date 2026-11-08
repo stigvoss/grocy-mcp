@@ -257,6 +257,18 @@ grocy-mcp tools together:
 3. `shopping_list_add_missing_tool` — auto-add understocked products to shopping list
 4. For each overdue chore: `chore_execute_tool("Vacuum living room")` — mark as done
 
+### "Correct a wrong entry or booking"
+
+1. `stock_entries_tool("Beef")` — list the product's entries with their `entry_id`
+2. `stock_entry_edit_tool(entry_id, price=..., best_before_date=...)` — fix one entry
+3. Or `stock_journal_tool("Beef")` — find the booking, then `stock_undo_tool(booking_id)`
+
+Entry IDs are **not stable**: any booking (transfer, consume, open, inventory, undo, or another
+edit) can replace or split entries, and undoing a consume brings the unit back as a *new* entry.
+List the entries again right before every edit instead of reusing an ID. An edit of an entry that
+changed since it was read is refused and nothing is written. Both tools rewrite history, so
+confirm with the user first.
+
 ### "Add a new recipe from a description"
 
 1. `stock_search_tool("flour")` — find product IDs for ingredients

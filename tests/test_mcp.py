@@ -307,3 +307,27 @@ async def test_product_create_tool_with_only_null_userfields_makes_no_userfield_
     payload = result.structured_content
     assert payload["created"] is True and "userfields_set" not in payload
     assert not [c for c in calls if c[0] == "userfields"]
+
+
+async def test_entry_tool_descriptions_warn_that_entry_ids_change():
+    tools = {t.name: (t.description or "") for t in await create_mcp_server().list_tools()}
+    assert "not stable" in tools["stock_entries_tool"]
+    assert "list the entries again" in tools["stock_entries_tool"]
+    assert "not stable" in tools["stock_entry_edit_tool"]
+    assert "fresh stock_entries_tool call" in tools["stock_entry_edit_tool"]
+    assert "new stock entry with a new entry ID" in tools["stock_undo_tool"]
+
+
+def test_readme_documents_correcting_stock_and_unstable_entry_ids():
+    from pathlib import Path
+
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+    section = readme.split('### "Correct a wrong entry or booking"')[1].split("\n### ")[0]
+    for tool in (
+        "stock_entries_tool",
+        "stock_entry_edit_tool",
+        "stock_journal_tool",
+        "stock_undo_tool",
+    ):
+        assert tool in section
+    assert "not stable" in section and "new* entry" in section
