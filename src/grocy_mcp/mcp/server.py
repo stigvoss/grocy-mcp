@@ -272,6 +272,10 @@ def create_mcp_server() -> FastMCP:
         Use the entry_id with stock_entry_edit_tool. Each entry has amount, opened, dates,
         price and location.
 
+        Entry IDs are not stable: any booking (transfer, consume, open, inventory, undo or an
+        edit) can replace or split entries, so list the entries again right before editing
+        instead of reusing an ID from earlier.
+
         Args:
             product: Product name or numeric product ID.
             location: Optional location name or ID to filter on.
@@ -296,7 +300,9 @@ def create_mcp_server() -> FastMCP:
         stock use stock_consume_tool; to reverse a booking use stock_undo_tool. The edit is
         coordinated with this server's other stock tools; if the entry was changed by something
         else (a recipe consumption, the Grocy UI) between reading and writing, nothing is
-        written and you are asked to list the entries and retry.
+        written and you are asked to list the entries and retry. Entry IDs are not stable (any
+        booking, including undo and inventory, can replace or split entries), so take the ID
+        from a fresh stock_entries_tool call.
 
         Args:
             entry_id: Stock entry ID (from stock_entries_tool).
@@ -317,7 +323,9 @@ def create_mcp_server() -> FastMCP:
         """Reverse a stock booking, e.g. an add or consume made by mistake.
 
         The booking ID is the number in brackets on each line of stock_journal_tool. This
-        rewrites stock history, so confirm with the user before using it.
+        rewrites stock history, so confirm with the user before using it. Undoing a consume
+        brings the unit back as a new stock entry with a new entry ID (not the old one), so list
+        the entries again with stock_entries_tool before editing it.
 
         Args:
             booking_id: Booking ID from stock_journal_tool.
