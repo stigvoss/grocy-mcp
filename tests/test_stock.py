@@ -605,7 +605,7 @@ def test_stock_inventory_locks_are_not_retained_after_use():
 
     asyncio.run(both())
     gc.collect()
-    assert all(len(locks) == 0 for locks in stock_module._inventory_locks.values())
+    assert all(len(locks) == 0 for locks in stock_module._product_locks.values())
 
 
 async def test_stock_overview_rounds_and_hides_float_noise_rows(mock_client):
@@ -798,6 +798,126 @@ async def test_stock_consume_default_behaviour_unchanged(mock_client):
     mock_client.get_stock_locations.assert_not_called()
 
 
+def _entry(**over):
+    entry = {
+        "id": 24,
+        "product_id": 1,
+        "amount": 2,
+        "best_before_date": "2026-11-07",
+        "purchased_date": "2026-11-07",
+        "price": None,
+        "open": 0,
+        "location_id": 2,
+        "shopping_location_id": None,
+    }
+    entry.update(over)
+    return entry
+
+
+async def test_stock_entry_edit_sends_full_entry_with_changes(mock_client):
+    from grocy_mcp.core.stock import stock_entry_edit
+
+    mock_client.get_stock_entry.return_value = _entry(shopping_location_id=2, note="from market")
+    mock_client.get_objects.return_value = [{"id": 4, "name": "Freezer"}]
+    with patch("grocy_mcp.core.stock.resolve_location", return_value=4):
+        result = await stock_entry_edit(
+            mock_client, 24, price=15.5, best_before_date="2027-01-31", location="Freezer"
+        )
+    mock_client.update_stock_entry.assert_called_once_with(
+        24,
+        {
+            "amount": 2,
+            "best_before_date": "2027-01-31",
+            "purchased_date": "2026-11-07",
+            "location_id": 4,
+            "open": 0,
+            "shopping_location_id": 2,
+            "note": "from market",
+            "price": 15.5,
+        },
+    )
+    assert "price None -> 15.5" in result
+    assert "best_before_date 2026-11-07 -> 2027-01-31" in result
+
+
+async def test_stock_entry_edit_open_flag(mock_client):
+    from grocy_mcp.core.stock import stock_entry_edit
+
+    mock_client.get_stock_entry.return_value = _entry()
+    await stock_entry_edit(mock_client, 24, open=True)
+    assert mock_client.update_stock_entry.call_args.args[1]["open"] == 1
+
+
+@pytest.mark.parametrize(
+    "kwargs, message",
+    [
+        ({}, "at least one field"),
+        ({"amount": 0}, "greater than 0"),
+        ({"amount": float("nan")}, "greater than 0"),
+        ({"price": -1}, "price"),
+        ({"price": float("inf")}, "price"),
+        ({"best_before_date": "20270131"}, "best_before_date"),
+        ({"purchased_date": "tomorrow"}, "purchased_date"),
+    ],
+)
+async def test_stock_entry_edit_validates_before_any_request(mock_client, kwargs, message):
+    from grocy_mcp.core.stock import stock_entry_edit
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    with pytest.raises(GrocyValidationError, match=message):
+        await stock_entry_edit(mock_client, 24, **kwargs)
+    mock_client.get_stock_entry.assert_not_called()
+    mock_client.update_stock_entry.assert_not_called()
+
+
+async def test_stock_undo_calls_client_and_explains_failure(mock_client):
+    from grocy_mcp.core.stock import stock_undo
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    mock_client.get_object.return_value = {"id": 17, "product_id": 1}
+    assert "Undid booking 17" in await stock_undo(mock_client, 17)
+    mock_client.get_object.assert_called_once_with("stock_log", 17)
+    mock_client.undo_booking.assert_called_once_with(17)
+
+    mock_client.undo_booking.side_effect = GrocyValidationError("Validation error: gone")
+    with pytest.raises(GrocyValidationError, match="may already be undone"):
+        await stock_undo(mock_client, 17)
+
+
+async def test_stock_undo_of_an_unknown_booking_is_a_clear_error(mock_client):
+    from grocy_mcp.core.stock import stock_undo
+    from grocy_mcp.exceptions import GrocyNotFoundError, GrocyValidationError
+
+    mock_client.get_object.side_effect = GrocyNotFoundError("Not found: x")
+    with pytest.raises(GrocyValidationError, match="does not exist"):
+        await stock_undo(mock_client, 999)
+    mock_client.undo_booking.assert_not_called()
+
+
+async def test_stock_entries_lists_ids_and_location_names(mock_client):
+    from grocy_mcp.core.stock import stock_entries_data
+
+    mock_client.get_stock_entries.return_value = [
+        _entry(id=24, location_id=2),
+        _entry(id=25, location_id=4, open=1, price=4.5),
+    ]
+
+    async def get_objects(entity, query=None):
+        return {"locations": [{"id": 2, "name": "Fridge"}, {"id": 4, "name": "Freezer"}]}[entity]
+
+    mock_client.get_objects.side_effect = get_objects
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        rows = await stock_entries_data(mock_client, "Beef")
+        freezer = None
+        with patch("grocy_mcp.core.stock.resolve_location", return_value=4):
+            freezer = await stock_entries_data(mock_client, "Beef", location="Freezer")
+    assert [(r["entry_id"], r["location"], r["opened"]) for r in rows] == [
+        (24, "Fridge", False),
+        (25, "Freezer", True),
+    ]
+    assert [r["entry_id"] for r in freezer] == [25]
+
+
 async def test_unknown_numeric_location_is_an_error_not_an_empty_result(mock_client):
     from grocy_mcp.core.stock import stock_by_location_data, stock_levels_data
     from grocy_mcp.exceptions import GrocyValidationError
@@ -843,6 +963,40 @@ async def test_stock_consume_from_location_compares_the_real_balance(
             mock_client.consume_stock.assert_not_called()
 
 
+async def test_stock_entry_edit_keeps_the_note_on_a_price_only_edit(mock_client):
+    from grocy_mcp.core.stock import stock_entry_edit
+
+    mock_client.get_stock_entry.return_value = _entry(note="freeze on arrival")
+    await stock_entry_edit(mock_client, 24, price=2.5)
+    assert mock_client.update_stock_entry.call_args.args[1]["note"] == "freeze on arrival"
+
+
+class _FakeEntryClient:
+    """Stateful stand-in: a PUT replaces the entry with exactly what it was sent."""
+
+    def __init__(self):
+        self.entry = _entry(amount=1, price=None)
+
+    async def get_stock_entry(self, entry_id):
+        await asyncio.sleep(0)
+        return dict(self.entry)
+
+    async def update_stock_entry(self, entry_id, payload):
+        await asyncio.sleep(0)
+        self.entry = {**self.entry, **payload}
+
+
+async def test_stock_entry_edit_overlapping_edits_do_not_overwrite_each_other():
+    from grocy_mcp.core.stock import stock_entry_edit
+
+    client = _FakeEntryClient()
+    await asyncio.gather(
+        stock_entry_edit(client, 24, amount=5),
+        stock_entry_edit(client, 24, price=9.5),
+    )
+    assert client.entry["amount"] == 5 and client.entry["price"] == 9.5
+
+
 async def test_stock_consume_error_hides_noise_rows_but_lists_real_ones(mock_client):
     from grocy_mcp.exceptions import GrocyValidationError
 
@@ -858,3 +1012,151 @@ async def test_stock_consume_error_hides_noise_rows_but_lists_real_ones(mock_cli
     ):
         await stock_consume(mock_client, "Beef", 2.0, from_location="Freezer")
     assert "Freezer 1, Fridge 3" in str(exc.value) and "Pantry" not in str(exc.value)
+
+
+async def test_entries_and_edit_reject_unknown_numeric_locations(mock_client):
+    from grocy_mcp.core.stock import stock_entries_data, stock_entry_edit
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    async def get_objects(entity, query=None):
+        return {"locations": [{"id": 2, "name": "Fridge"}, {"id": 4, "name": "Freezer"}]}[entity]
+
+    mock_client.get_objects.side_effect = get_objects
+    mock_client.get_stock_entry.return_value = _entry()
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+        pytest.raises(GrocyValidationError, match=r"Unknown location '999'.*Fridge \(2\)"),
+    ):
+        await stock_entries_data(mock_client, "Beef", location="999")
+    with pytest.raises(GrocyValidationError, match=r"Unknown location '999'"):
+        await stock_entry_edit(mock_client, 24, location="999")
+    mock_client.update_stock_entry.assert_not_called()
+
+
+class _FakeProductClient:
+    """Stateful stand-in with one entry; a consume lowers it, an edit PUT replaces fields."""
+
+    def __init__(self, amount=2):
+        self.entry = _entry(amount=amount, price=None)
+
+    async def get_stock_entry(self, entry_id):
+        await asyncio.sleep(0)
+        return dict(self.entry)
+
+    async def update_stock_entry(self, entry_id, payload):
+        await asyncio.sleep(0)
+        self.entry = {**self.entry, **payload}
+
+    async def get_stock_locations(self, product_id):
+        await asyncio.sleep(0)
+        return [{"location_id": 2, "location_name": "Fridge", "amount": self.entry["amount"]}]
+
+    async def consume_stock(self, product_id, amount, **kwargs):
+        await asyncio.sleep(0)
+        self.entry["amount"] -= amount
+
+
+async def test_consume_overlapping_a_price_only_edit_is_not_undone():
+    from grocy_mcp.core.stock import stock_entry_edit
+
+    client = _FakeProductClient(amount=2)
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+        patch("grocy_mcp.core.stock.resolve_location", return_value=2),
+    ):
+        await asyncio.gather(
+            stock_entry_edit(client, 24, price=9.5),
+            stock_consume(client, "Beef", 1.0, from_location="Fridge"),
+        )
+    assert client.entry["amount"] == 1  # the consumed unit stays consumed
+    assert client.entry["price"] == 9.5
+
+
+async def test_edit_started_first_still_sees_the_consume_that_ran_before_its_write():
+    from grocy_mcp.core.stock import stock_entry_edit
+
+    client = _FakeProductClient(amount=2)
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+        patch("grocy_mcp.core.stock.resolve_location", return_value=2),
+    ):
+        await asyncio.gather(
+            stock_consume(client, "Beef", 1.0, from_location="Fridge"),
+            stock_entry_edit(client, 24, price=9.5),
+        )
+    assert client.entry["amount"] == 1 and client.entry["price"] == 9.5
+
+
+class _FakeUndoClient(_FakeProductClient):
+    """A consume booking that an overlapping undo and price-only edit both touch."""
+
+    async def get_object(self, entity, obj_id):
+        await asyncio.sleep(0)
+        return {"id": obj_id, "product_id": 1}
+
+    async def undo_booking(self, booking_id):
+        await asyncio.sleep(0)
+        self.entry["amount"] += 1  # reverses a consume of one unit
+
+
+async def test_undo_overlapping_an_edit_is_not_overwritten():
+    from grocy_mcp.core.stock import stock_entry_edit, stock_undo
+
+    client = _FakeUndoClient(amount=1)
+    await asyncio.gather(
+        stock_entry_edit(client, 24, price=9.5),
+        stock_undo(client, 17),
+    )
+    assert client.entry["amount"] == 2 and client.entry["price"] == 9.5
+
+
+class _FakeOpenClient(_FakeProductClient):
+    """One unopened pack; opening flips the entry to opened, like Grocy does."""
+
+    async def get_stock_product(self, product_id):
+        await asyncio.sleep(0)
+        return {
+            "product": {"name": "Beef"},
+            "stock_amount": self.entry["amount"],
+            "stock_amount_opened": self.entry["amount"] if self.entry["open"] else 0,
+        }
+
+    async def open_stock(self, product_id, amount):
+        await asyncio.sleep(0)
+        self.entry["open"] = 1
+
+
+async def test_opening_overlapping_a_price_only_edit_is_not_silently_undone():
+    from grocy_mcp.core.stock import stock_entry_edit, stock_open
+
+    for first in ("edit", "open"):
+        client = _FakeOpenClient(amount=1)
+        with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+            calls = {
+                "edit": stock_entry_edit(client, 24, price=9.5),
+                "open": stock_open(client, "Beef", 1.0),
+            }
+            order = ["edit", "open"] if first == "edit" else ["open", "edit"]
+            await asyncio.gather(*(calls[name] for name in order))
+        assert client.entry["open"] == 1, f"open was undone (started with {first})"
+        assert client.entry["price"] == 9.5
+
+
+async def test_entry_edit_refuses_to_write_when_the_entry_changed_since_it_was_read(mock_client):
+    from grocy_mcp.core.stock import stock_entry_edit
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    # reads: the product lookup, the read under the lock, then the check just before writing;
+    # e.g. a recipe consumption lowered the entry after the read under the lock
+    mock_client.get_stock_entry.side_effect = [_entry(amount=2), _entry(amount=2), _entry(amount=1)]
+    with pytest.raises(GrocyValidationError, match="changed while it was being edited"):
+        await stock_entry_edit(mock_client, 24, price=9.5)
+    mock_client.update_stock_entry.assert_not_called()
+
+
+async def test_entry_edit_writes_when_the_entry_is_unchanged(mock_client):
+    from grocy_mcp.core.stock import stock_entry_edit
+
+    mock_client.get_stock_entry.return_value = _entry(amount=2)
+    await stock_entry_edit(mock_client, 24, price=9.5)
+    mock_client.update_stock_entry.assert_awaited_once()

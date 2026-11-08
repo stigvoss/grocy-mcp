@@ -92,6 +92,8 @@ from grocy_mcp.core.stock import (
     stock_barcode_lookup,
     stock_by_location_data,
     stock_consume,
+    stock_entries_data,
+    stock_entry_edit,
     stock_expiring,
     stock_inventory,
     stock_levels_data,
@@ -100,6 +102,7 @@ from grocy_mcp.core.stock import (
     stock_product_info,
     stock_search,
     stock_transfer,
+    stock_undo,
 )
 from grocy_mcp.core.stock_journal import stock_journal
 from grocy_mcp.core.system import entity_list, entity_manage, system_info, userfields_set
@@ -204,6 +207,66 @@ def create_mcp_server() -> FastMCP:
         """
         async with _get_client() as client:
             return await products_list_data(client, fields, userfields_set)
+
+    @mcp.tool()
+    async def stock_entries_tool(product: str, location: str | None = None) -> list[dict]:
+        """List a product's individual stock entries with their entry IDs.
+
+        Use the entry_id with stock_entry_edit_tool. Each entry has amount, opened, dates,
+        price and location.
+
+        Args:
+            product: Product name or numeric product ID.
+            location: Optional location name or ID to filter on.
+        """
+        async with _get_client() as client:
+            return await stock_entries_data(client, product, location)
+
+    @mcp.tool()
+    async def stock_entry_edit_tool(
+        entry_id: int,
+        amount: float | None = None,
+        best_before_date: str | None = None,
+        price: float | None = None,
+        purchased_date: str | None = None,
+        location: str | None = None,
+        open: bool | None = None,
+    ) -> str:
+        """Correct one stock entry: amount, best-before date, price, purchase date, location
+        or opened state. This rewrites stock history, so confirm with the user before using it.
+
+        Only the fields you pass change. Find entry IDs with stock_entries_tool. To remove
+        stock use stock_consume_tool; to reverse a booking use stock_undo_tool. The edit is
+        coordinated with this server's other stock tools; if the entry was changed by something
+        else (a recipe consumption, the Grocy UI) between reading and writing, nothing is
+        written and you are asked to list the entries and retry.
+
+        Args:
+            entry_id: Stock entry ID (from stock_entries_tool).
+            amount: New amount of this entry (greater than 0).
+            best_before_date: New best-before date, YYYY-MM-DD.
+            price: New price per stock unit.
+            purchased_date: New purchase date, YYYY-MM-DD.
+            location: New location name or numeric ID.
+            open: Mark the entry as opened (true) or unopened (false).
+        """
+        async with _get_client() as client:
+            return await stock_entry_edit(
+                client, entry_id, amount, best_before_date, price, purchased_date, location, open
+            )
+
+    @mcp.tool()
+    async def stock_undo_tool(booking_id: int) -> str:
+        """Reverse a stock booking, e.g. an add or consume made by mistake.
+
+        The booking ID is the number in brackets on each line of stock_journal_tool. This
+        rewrites stock history, so confirm with the user before using it.
+
+        Args:
+            booking_id: Booking ID from stock_journal_tool.
+        """
+        async with _get_client() as client:
+            return await stock_undo(client, booking_id)
 
     @mcp.tool()
     async def stock_expiring_tool() -> str:
@@ -718,7 +781,8 @@ def create_mcp_server() -> FastMCP:
         """View recent stock transaction history.
 
         Shows the 50 most recent stock changes (purchases, consumption,
-        transfers, inventory corrections). Optionally filter by product.
+        transfers, inventory corrections). Optionally filter by product. The number in
+        brackets on each line is the booking ID that stock_undo_tool takes.
 
         Args:
             product: Optional product name or ID to filter by.
