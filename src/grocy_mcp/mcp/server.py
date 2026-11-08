@@ -447,10 +447,14 @@ def create_mcp_server() -> FastMCP:
         Use this when the actual count differs from what Grocy shows — e.g. after
         a manual count. This replaces the current amount, not adds to it.
 
-        When the amount goes down Grocy removes opened units first, so pass opened_amount to
-        end up with the right split (e.g. new_amount=2, opened_amount=1 for one unopened and
-        one opened pack). The reply always shows the resulting unopened and opened amounts.
-        Grocy cannot un-open units: if more are open than opened_amount, the reply says so.
+        When the amount goes down Grocy chooses the units itself: opened ones first, then the
+        earliest best-before date, then the earliest purchase date, whatever their location (a
+        location cannot be given). The reply names the locations that lost stock; to take stock
+        from one specific location use stock_consume_tool with from_location instead. Pass
+        opened_amount to end up with the right split (e.g. new_amount=2, opened_amount=1 for
+        one unopened and one opened pack). The reply always shows the resulting unopened and
+        opened amounts. Grocy cannot un-open units: if more are open than opened_amount, the
+        reply says so.
 
         Args:
             product: Product name (e.g. "Milk") or numeric product ID.

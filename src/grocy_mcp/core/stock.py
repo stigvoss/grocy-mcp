@@ -276,6 +276,37 @@ async def stock_transfer(
         return f"Transferred {amount} of '{product}' to location '{to_location}'."
 
 
+async def _stock_by_location_name(client: GrocyClient, product_id: int) -> dict[str, float]:
+    """Where a product's stock sits now: location name -> amount (noise rows left out)."""
+    where: dict[str, float] = {}
+    for row in await client.get_stock_locations(product_id):
+        if tidy_amount(row.get("amount")):
+            name = str(row.get("location_name") or row.get("location_id") or "?")
+            where[name] = where.get(name, 0.0) + float(row["amount"])
+    return where
+
+
+def _removed_from(before: dict[str, float], after: dict[str, float]) -> str:
+    """Sentence naming the locations an inventory decrease took stock from (may be empty)."""
+    lost = {
+        name: amount - after.get(name, 0.0)
+        for name, amount in before.items()
+        if tidy_amount(amount - after.get(name, 0.0))
+        and amount - after.get(name, 0.0) > _AMOUNT_EPSILON
+    }
+    if not lost:
+        return ""
+    text = " Stock removed from: " + ", ".join(f"{n} {format_amount(a)}" for n, a in lost.items())
+    text += "."
+    if len(before) > 1:
+        text += (
+            " Grocy chose these units itself (opened first, then the earliest best-before date, "
+            "then the earliest purchase date), not by location; to take stock from a specific "
+            "location use stock_consume_tool with from_location."
+        )
+    return text
+
+
 async def stock_inventory_outcome(
     client: GrocyClient,
     product: str,
@@ -284,10 +315,12 @@ async def stock_inventory_outcome(
 ) -> StockOutcome:
     """Set the stock amount via inventory and report the opened/unopened split.
 
-    Grocy removes opened units first when the amount goes down. With ``opened_amount`` the
-    missing units are opened afterwards so the result matches the physical count. Grocy cannot
-    un-open units. ``ok`` is False (and ``partial`` True, since the total was still adjusted)
-    when the requested ``opened_amount`` could not be reached.
+    When the amount goes down Grocy decides which units go: opened ones first, then the
+    earliest best-before date, then the earliest purchase date, whatever their location; the
+    result names the locations that lost stock. With ``opened_amount`` the missing units are
+    opened afterwards so the result matches the physical count. Grocy cannot un-open units.
+    ``ok`` is False (and ``partial`` True, since the total was still adjusted) when the
+    requested ``opened_amount`` could not be reached.
     """
     if not (math.isfinite(new_amount) and new_amount >= 0):
         raise GrocyValidationError("new_amount must be a finite number that is not negative.")
@@ -303,10 +336,19 @@ async def stock_inventory_outcome(
         done: list[str] = []  # writes that really happened, so a later failure can say so
         try:
             total, _, _ = _split_amounts(await client.get_stock_product(product_id))
+            removed = ""
             if abs(total - new_amount) > _AMOUNT_EPSILON:
+                # Where the stock sits before a decrease, to report afterwards what was taken
+                before = (
+                    await _stock_by_location_name(client, product_id) if new_amount < total else {}
+                )
                 # Grocy rejects an inventory that equals the current amount, so skip it then
                 await client.inventory_stock(product_id, new_amount)
                 done.append(f"stock set to {format_amount(new_amount)}")
+                if before:
+                    removed = _removed_from(
+                        before, await _stock_by_location_name(client, product_id)
+                    )
             total, opened, unopened = _split_amounts(await client.get_stock_product(product_id))
 
             note = ""
@@ -355,7 +397,7 @@ async def stock_inventory_outcome(
         message=(
             f"{'Inventory updated' if adjusted else 'No inventory change needed'}: "
             f"'{product}' at {new_amount} "
-            f"(unopened {format_amount(unopened)}, opened {format_amount(opened)}).{note}"
+            f"(unopened {format_amount(unopened)}, opened {format_amount(opened)}).{removed}{note}"
         ),
         # partial: something was really written even though the request was not met in full
         partial=bool(note) and bool(done),
