@@ -360,3 +360,43 @@ async def test_batch_does_not_report_an_applied_consume_as_failed(client, mock_a
     )
     assert consume.call_count == 1
     assert result["results"][0]["ok"] is True and result["applied_count"] == 1
+
+
+@pytest.mark.parametrize("status", [301, 302, 307, 308])
+async def test_a_redirect_is_an_error_not_a_success(client, mock_api, status):
+    sent = mock_api.post("/stock/products/1/add").mock(
+        return_value=httpx.Response(
+            status, headers={"Location": "https://grocy.test/login"}, text="<html>go</html>"
+        )
+    )
+    with pytest.raises(GrocyServerError, match=r"redirect to https://grocy.test/login.*GROCY_URL"):
+        await client.add_stock(1, 2.0)
+    assert sent.call_count == 1  # and nothing is retried or followed
+
+
+async def test_a_redirected_read_says_redirect_not_unreadable_json(client, mock_api):
+    mock_api.get("/stock").mock(
+        return_value=httpx.Response(302, headers={"Location": "/login"}, text="<html/>")
+    )
+    with pytest.raises(GrocyServerError, match="redirect"):
+        await client.get_stock()
+
+
+async def test_batch_reports_a_redirected_write_as_failed(client, mock_api):
+    from grocy_mcp.core.workflows import workflow_stock_apply_data
+
+    mock_api.post("/stock/products/1/consume").mock(
+        return_value=httpx.Response(302, headers={"Location": "https://x/login"}, text="<html/>")
+    )
+    result = await workflow_stock_apply_data(
+        client, [{"action": "consume", "product": "1", "amount": 1}]
+    )
+    assert result["results"][0]["ok"] is False and result["applied_count"] == 0
+    assert "redirect" in result["results"][0]["error"]
+
+
+async def test_successful_statuses_without_a_body_still_work(client, mock_api):
+    mock_api.put("/userfields/products/87").mock(return_value=httpx.Response(204))
+    mock_api.post("/stock/products/1/open").mock(return_value=httpx.Response(200, text=""))
+    await client.update_userfields("products", 87, {"a": 1})
+    assert await client.open_stock(1, 1.0) is None
