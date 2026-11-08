@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `stock_consume_tool` (and `grocy stock consume`) takes optional `from_location` and `spoiled`;
+  consuming from a location that holds too little consumes nothing and lists where the stock is
 - **Stock by location**: `stock_by_location_tool` lists what is stored where (product name, amount,
   unit; optional location and `freezer_only`); `stock_product_info_tool` shows the locations that
   hold the stock and labels `Location` as the default location; `stock_levels_tool` takes an
