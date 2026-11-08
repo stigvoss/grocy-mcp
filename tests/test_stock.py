@@ -225,12 +225,19 @@ def _info(stock, opened, name="Minced beef"):
 
 async def test_stock_product_info_includes_unit_location_and_opened(mock_client):
     mock_client.get_stock_product.return_value = _info(4, 1)
+    mock_client.get_stock_locations.return_value = [
+        {"location_name": "Freezer", "amount": 3},
+        {"location_name": "Fridge", "amount": 1},
+        {"location_name": "Pantry", "amount": 4.4408920985006e-16},
+    ]
     with patch("grocy_mcp.core.stock.resolve_product", return_value=7):
         result = await stock_product_info(mock_client, "Minced beef")
     assert "In stock: 4 Pack" in result
     assert "Unopened: 3" in result
     assert "Opened: 1" in result
-    assert "Location: Freezer" in result
+    assert "Stock locations: Freezer 3, Fridge 1" in result
+    assert "Pantry" not in result
+    assert "Default location (where new stock goes, not necessarily where it is): Freezer" in result
 
 
 async def test_stock_open_already_open_returns_message_without_calling_api(mock_client):
@@ -645,3 +652,102 @@ async def test_stock_product_info_does_not_cut_significant_digits(mock_client):
         result = await stock_product_info(mock_client, "Flour")
     assert "In stock: 1234567 " in result
     assert "e+" not in result
+
+
+def _location_client(mock_client):
+    async def get_objects(entity, query=None):
+        return {
+            "stock_current_locations": [
+                {
+                    "product_id": 1,
+                    "amount": 3,
+                    "location_id": 4,
+                    "location_name": "Freezer",
+                    "location_is_freezer": 1,
+                },
+                {
+                    "product_id": 1,
+                    "amount": 1.0000000000000002,
+                    "location_id": 2,
+                    "location_name": "Fridge",
+                    "location_is_freezer": 0,
+                },
+                {
+                    "product_id": 2,
+                    "amount": 2,
+                    "location_id": 2,
+                    "location_name": "Fridge",
+                    "location_is_freezer": 0,
+                },
+                {
+                    "product_id": 2,
+                    "amount": 4.4408920985006e-16,
+                    "location_id": 3,
+                    "location_name": "Pantry",
+                    "location_is_freezer": 0,
+                },
+            ],
+            "products": [
+                {"id": 1, "name": "Minced beef", "qu_id_stock": 7},
+                {"id": 2, "name": "Milk", "qu_id_stock": 7},
+            ],
+            "quantity_units": [{"id": 7, "name": "Pack"}],
+            "locations": [
+                {"id": 2, "name": "Fridge"},
+                {"id": 3, "name": "Pantry"},
+                {"id": 4, "name": "Freezer"},
+            ],
+        }[entity]
+
+    mock_client.get_objects.side_effect = get_objects
+    return mock_client
+
+
+async def test_stock_by_location_lists_names_amounts_and_skips_noise(mock_client):
+    from grocy_mcp.core.stock import stock_by_location_data
+
+    rows = await stock_by_location_data(_location_client(mock_client))
+    assert [(r["location"], r["name"], r["amount"]) for r in rows] == [
+        ("Freezer", "Minced beef", 3.0),
+        ("Fridge", "Milk", 2.0),
+        ("Fridge", "Minced beef", 1.0),
+    ]
+    assert rows[0]["stock_unit"] == "Pack"
+    assert rows[0]["is_freezer"] is True
+
+
+async def test_stock_by_location_filters_by_name_and_freezer(mock_client):
+    from grocy_mcp.core.stock import stock_by_location_data
+
+    client = _location_client(mock_client)
+    fridge = await stock_by_location_data(client, location="Fridge")
+    assert {r["location"] for r in fridge} == {"Fridge"}
+    freezer = await stock_by_location_data(client, freezer_only=True)
+    assert [r["name"] for r in freezer] == ["Minced beef"]
+
+
+async def test_stock_levels_location_filter_adds_amount_in_location(mock_client):
+    from grocy_mcp.core.stock import stock_levels_data
+
+    client = _location_client(mock_client)
+    mock_client.get_stock.return_value = [
+        {"product_id": 1, "amount": 4, "amount_aggregated": 4},
+        {"product_id": 2, "amount": 2, "amount_aggregated": 2},
+    ]
+    rows = await stock_levels_data(client, location="Freezer")
+    assert [(r["name"], r["amount"], r["amount_in_location"]) for r in rows] == [
+        ("Minced beef", 4.0, 3.0)
+    ]
+
+
+async def test_unknown_numeric_location_is_an_error_not_an_empty_result(mock_client):
+    from grocy_mcp.core.stock import stock_by_location_data, stock_levels_data
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    client = _location_client(mock_client)
+    for call in (
+        lambda: stock_by_location_data(client, location="999"),
+        lambda: stock_levels_data(client, location="999"),
+    ):
+        with pytest.raises(GrocyValidationError, match=r"Unknown location '999'.*Fridge \(2\)"):
+            await call()

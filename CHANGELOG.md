@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Stock by location**: `stock_by_location_tool` lists what is stored where (product name, amount,
+  unit; optional location and `freezer_only`); `stock_product_info_tool` shows the locations that
+  hold the stock and labels `Location` as the default location; `stock_levels_tool` takes an
+  optional `location` filter
 - **Price and details when adding stock**: `stock_add_tool` (and `grocy stock add`) and the items of
   `workflow_stock_intake_apply_tool` accept optional `price` (per stock unit), `best_before_date`
   (YYYY-MM-DD) and `location_id`
