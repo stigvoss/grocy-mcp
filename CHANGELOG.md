@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Amounts in `stock_levels_tool`, `stock_overview_tool`, `stock_product_info_tool` and
+  `entity_list_tool stock_current_locations` are rounded to 6 decimals (no more
+  `1.0000000000000007`); overview and current-locations rows that round to zero are hidden with a
+  "(N zero-amount rows hidden)" line
 - `stock_inventory_tool` (and `grocy stock inventory --opened-amount`) takes an optional
   `opened_amount` and always reports the resulting unopened/opened split; Grocy removes opened
   units first on a decrease, so missing opened units are opened afterwards (Grocy cannot un-open)

@@ -599,3 +599,49 @@ def test_stock_inventory_locks_are_not_retained_after_use():
     asyncio.run(both())
     gc.collect()
     assert all(len(locks) == 0 for locks in stock_module._inventory_locks.values())
+
+
+async def test_stock_overview_rounds_and_hides_float_noise_rows(mock_client):
+    mock_client.get_stock.return_value = [
+        {"product_id": 1, "amount": 1.0000000000000007, "product": {"name": "Paper towel"}},
+        {"product_id": 2, "amount": 4.4408920985006e-16, "product": {"name": "Phantom"}},
+        {"product_id": 3, "amount": 12.345678, "product": {"name": "Flour"}},
+    ]
+    result = await stock_overview(mock_client)
+    assert "Paper towel — 1" in result
+    assert "1.0000000" not in result
+    assert "Phantom" not in result
+    assert "Flour — 12.345678" in result
+    assert "(1 zero-amount row hidden)" in result
+
+
+async def test_stock_levels_rounds_amounts(mock_client):
+    from grocy_mcp.core.stock import stock_levels_data
+
+    mock_client.get_stock.return_value = [
+        {"product_id": 1, "amount": 1.0000000000000007, "amount_aggregated": 1.0000000000000007}
+    ]
+
+    async def get_objects(entity, query=None):
+        return {
+            "products": [{"id": 1, "name": "Paper towel", "qu_id_stock": 1}],
+            "quantity_units": [{"id": 1, "name": "Roll"}],
+            "locations": [],
+        }[entity]
+
+    mock_client.get_objects.side_effect = get_objects
+    rows = await stock_levels_data(mock_client)
+    assert rows[0]["amount"] == 1.0
+    assert rows[0]["amount_aggregated"] == 1.0
+
+
+async def test_stock_product_info_does_not_cut_significant_digits(mock_client):
+    mock_client.get_stock_product.return_value = {
+        "product": {"name": "Flour"},
+        "stock_amount": 1234567.0,
+        "stock_amount_opened": 0,
+    }
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await stock_product_info(mock_client, "Flour")
+    assert "In stock: 1234567 " in result
+    assert "e+" not in result

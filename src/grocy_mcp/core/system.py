@@ -6,6 +6,7 @@ import re
 
 from grocy_mcp.client import GrocyClient
 from grocy_mcp.core.reference_data import NON_DELETABLE_ENTITIES, READ_ONLY_ENTITIES
+from grocy_mcp.core.utils import tidy_amount, zero_rows_note
 from grocy_mcp.exceptions import GrocyValidationError
 
 _NOT_NULL = re.compile(r"NOT NULL constraint failed: (\w+)\.(\w+)")
@@ -88,11 +89,24 @@ async def entity_list(client: GrocyClient, entity: str) -> str:
     if not items:
         return f"No {entity} found."
 
+    hidden = 0
+    if entity == "stock_current_locations":
+        tidy_items = []
+        for item in items:
+            amount = tidy_amount(item.get("amount"))
+            if amount == 0:
+                hidden += 1
+                continue
+            tidy_items.append({**item, "amount": amount} if amount is not None else item)
+        items = tidy_items
+
     lines = [f"{entity} ({len(items)} item(s)):"]
     for item in items:
         item_id = item.get("id", "?")
         name = item.get("name", str(item))
         lines.append(f"  [{item_id}] {name}")
+    if hidden:
+        lines.append(f"  {zero_rows_note(hidden)}")
 
     return "\n".join(lines)
 
