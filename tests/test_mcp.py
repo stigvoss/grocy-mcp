@@ -331,3 +331,6 @@ def test_readme_documents_correcting_stock_and_unstable_entry_ids():
     ):
         assert tool in section
     assert "not stable" in section and "new* entry" in section
+    # it must not promise protection against changes made before the edit call started
+    flat = " ".join(section.split())
+    assert "while the edit is in progress" in flat and "cannot know what you saw" in flat
