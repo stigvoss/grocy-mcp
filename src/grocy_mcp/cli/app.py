@@ -555,16 +555,21 @@ def cmd_shopping_view(
 
 @shopping_app.command("add")
 def cmd_shopping_add(
-    product: str = typer.Argument(..., help="Product name or ID."),
+    product: str | None = typer.Argument(
+        None, help="Product name or ID (omit for a note-only line, with --note)."
+    ),
     amount: float = typer.Option(1.0, "--amount", "-a", help="Quantity to add."),
     list_id: int = typer.Option(1, "--list-id", "-l", help="Shopping list ID."),
     note: str | None = typer.Option(None, "--note", "-n", help="Optional note."),
+    skip_if_present: bool = typer.Option(
+        False, "--skip-if-present", help="Do nothing if the product or note is already listed."
+    ),
 ) -> None:
-    """Add a product to the shopping list."""
+    """Add a product, or a note-only line, to the shopping list."""
 
     async def _inner():
         async with _client() as client:
-            return await shopping_list_add(client, product, amount, list_id, note)
+            return await shopping_list_add(client, product, amount, list_id, note, skip_if_present)
 
     _exec(_inner())
 
