@@ -101,6 +101,11 @@ def _product_lock(product_id: int) -> asyncio.Lock:
     return keyed_lock(_product_locks, product_id)
 
 
+def product_lock(product_id: int) -> asyncio.Lock:
+    """Public handle on the per-product lock, for modules that add stock themselves."""
+    return _product_lock(product_id)
+
+
 def _split_amounts(info: dict) -> tuple[float, float, float]:
     """Return (total, opened, unopened) amounts from a stock product details response."""
     total = float(info.get("stock_amount") or 0)
@@ -183,9 +188,11 @@ async def stock_add(
         "shopping_location_id": shopping_location_id,
         **kwargs,
     }
-    await client.add_stock(
-        product_id, amount, **{k: v for k, v in options.items() if v is not None}
-    )
+    # Adding changes the stock an inventory or consume is reading, so it takes the same lock.
+    async with _product_lock(product_id):
+        await client.add_stock(
+            product_id, amount, **{k: v for k, v in options.items() if v is not None}
+        )
     suffix = f" at price {price:g}" if price is not None else ""
     return f"Added {amount} of '{product}' to stock{suffix}."
 
@@ -276,28 +283,35 @@ async def stock_transfer(
         return f"Transferred {amount} of '{product}' to location '{to_location}'."
 
 
-async def _stock_by_location_name(client: GrocyClient, product_id: int) -> dict[str, float]:
-    """Where a product's stock sits now: location name -> amount (noise rows left out)."""
-    where: dict[str, float] = {}
+async def _stock_by_location_id(
+    client: GrocyClient, product_id: int
+) -> dict[object, tuple[str, float]]:
+    """Where a product's stock sits now: location id -> (name, amount), noise rows left out.
+
+    Keyed by id, not name: the name is only for display, and a location renamed between two
+    snapshots must not look like one location emptied and another filled.
+    """
+    where: dict[object, tuple[str, float]] = {}
     for row in await client.get_stock_locations(product_id):
         if tidy_amount(row.get("amount")):
-            name = str(row.get("location_name") or row.get("location_id") or "?")
-            where[name] = where.get(name, 0.0) + float(row["amount"])
+            key = row.get("location_id", row.get("location_name"))
+            name, total = where.get(key, (str(row.get("location_name") or key or "?"), 0.0))
+            where[key] = (name, total + float(row["amount"]))
     return where
 
 
-def _removed_from(before: dict[str, float], after: dict[str, float]) -> str:
+def _removed_from(
+    before: dict[object, tuple[str, float]], after: dict[object, tuple[str, float]]
+) -> str:
     """Sentence naming the locations an inventory decrease took stock from (may be empty)."""
-    lost = {
-        name: amount - after.get(name, 0.0)
-        for name, amount in before.items()
-        if tidy_amount(amount - after.get(name, 0.0))
-        and amount - after.get(name, 0.0) > _AMOUNT_EPSILON
-    }
+    lost = []
+    for key, (name, amount) in before.items():
+        taken = amount - after.get(key, (name, 0.0))[1]
+        if taken > _AMOUNT_EPSILON and tidy_amount(taken):
+            lost.append(f"{name} {format_amount(taken)}")
     if not lost:
         return ""
-    text = " Stock removed from: " + ", ".join(f"{n} {format_amount(a)}" for n, a in lost.items())
-    text += "."
+    text = " Stock removed from: " + ", ".join(lost) + "."
     if len(before) > 1:
         text += (
             " Grocy chose these units itself (opened first, then the earliest best-before date, "
@@ -340,15 +354,13 @@ async def stock_inventory_outcome(
             if abs(total - new_amount) > _AMOUNT_EPSILON:
                 # Where the stock sits before a decrease, to report afterwards what was taken
                 before = (
-                    await _stock_by_location_name(client, product_id) if new_amount < total else {}
+                    await _stock_by_location_id(client, product_id) if new_amount < total else {}
                 )
                 # Grocy rejects an inventory that equals the current amount, so skip it then
                 await client.inventory_stock(product_id, new_amount)
                 done.append(f"stock set to {format_amount(new_amount)}")
                 if before:
-                    removed = _removed_from(
-                        before, await _stock_by_location_name(client, product_id)
-                    )
+                    removed = _removed_from(before, await _stock_by_location_id(client, product_id))
             total, opened, unopened = _split_amounts(await client.get_stock_product(product_id))
 
             note = ""

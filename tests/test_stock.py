@@ -1372,3 +1372,115 @@ async def test_failing_location_read_before_any_write_is_an_ordinary_failure(moc
     ):
         await stock_inventory_outcome(mock_client, "Beef", 2.0)
     mock_client.inventory_stock.assert_not_called()
+
+
+async def test_inventory_report_follows_location_ids_not_names(mock_client):
+    # location 2 is renamed between the two reads; nothing was removed there
+    mock_client.get_stock_product.side_effect = [
+        {"stock_amount": 4, "stock_amount_opened": 0},
+        {"stock_amount": 3, "stock_amount_opened": 0},
+    ]
+    mock_client.get_stock_locations.side_effect = [
+        [
+            {"location_id": 2, "location_name": "Fridge", "amount": 1},
+            {"location_id": 4, "location_name": "Freezer", "amount": 3},
+        ],
+        [
+            {"location_id": 2, "location_name": "Cold room", "amount": 1},
+            {"location_id": 4, "location_name": "Freezer", "amount": 2},
+        ],
+    ]
+    with patch("grocy_mcp.core.stock.resolve_product", return_value=1):
+        result = await stock_inventory(mock_client, "Beef", 3.0)
+    assert "Stock removed from: Freezer 1." in result
+    assert "Fridge" not in result and "Cold room" not in result
+
+
+class _RacingStock:
+    """Stateful stock for one product, with await points so calls can really interleave."""
+
+    def __init__(self):
+        self.stock = {2: ["Fridge", 1.0], 4: ["Freezer", 3.0]}  # id -> [name, amount]
+        self.removed = asyncio.Event()
+
+    @property
+    def total(self):
+        return sum(a for _, a in self.stock.values())
+
+    async def get_stock_product(self, product_id):
+        await asyncio.sleep(0)
+        return {"product": {"name": "Beef"}, "stock_amount": self.total, "stock_amount_opened": 0}
+
+    async def get_stock_locations(self, product_id):
+        await asyncio.sleep(0)
+        return [
+            {"location_id": i, "location_name": n, "amount": a}
+            for i, (n, a) in self.stock.items()
+            if a
+        ]
+
+    async def inventory_stock(self, product_id, new_amount):
+        await asyncio.sleep(0)
+        self.stock[2][1] = 0.0  # Grocy picks the Fridge unit
+        self.removed.set()
+        # give an unlocked add the chance to land right here, before the second snapshot
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    async def add_stock(self, product_id, amount, **kwargs):
+        await self.removed.wait()  # the add arrives just after the removal
+        self.stock[kwargs.get("location_id", 2)][1] += amount
+
+
+async def test_a_concurrent_add_cannot_hide_the_inventory_removal_report():
+    grocy = _RacingStock()
+    with (
+        patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+        patch("grocy_mcp.core.stock.resolve_location", return_value=2),
+    ):
+        result, _ = await asyncio.gather(
+            stock_inventory(grocy, "Beef", 3.0),
+            stock_add(grocy, "Beef", 1.0, location_id=2),
+        )
+    assert "Stock removed from: Fridge 1." in result
+    assert grocy.stock[2][1] == 1.0  # the add really happened, after the inventory
+
+
+def test_the_add_lock_is_what_keeps_the_report_intact():
+    # negative control: without the lock the add lands between the snapshots and the report vanishes
+    import contextlib
+
+    from grocy_mcp.core import stock as stock_module
+
+    @contextlib.asynccontextmanager
+    async def no_lock():
+        yield
+
+    async def scenario():
+        grocy = _RacingStock()
+        with (
+            patch("grocy_mcp.core.stock.resolve_product", return_value=1),
+            patch("grocy_mcp.core.stock.resolve_location", return_value=2),
+            patch.object(stock_module, "_product_lock", lambda pid: no_lock()),
+        ):
+            result, _ = await asyncio.gather(
+                stock_inventory(grocy, "Beef", 3.0),
+                stock_add(grocy, "Beef", 1.0, location_id=2),
+            )
+        return result
+
+    assert "Stock removed from" not in asyncio.run(scenario())  # the race really exists
+
+
+async def test_intake_apply_adds_under_the_product_lock():
+    from grocy_mcp.core.stock import product_lock
+    from grocy_mcp.core.workflows import workflow_stock_intake_apply_data
+
+    events = []
+
+    class Client:
+        async def add_stock(self, product_id, amount, **kwargs):
+            events.append(("add", product_lock(product_id).locked()))
+
+    await workflow_stock_intake_apply_data(Client(), [{"product_id": 7, "amount": 1}])
+    assert events == [("add", True)]  # the lock was held while the add ran

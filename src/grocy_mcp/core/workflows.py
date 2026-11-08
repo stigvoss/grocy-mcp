@@ -214,6 +214,8 @@ async def workflow_stock_intake_preview(client: GrocyClient, items: list[dict] |
 
 async def workflow_stock_intake_apply_data(client: GrocyClient, items: list[dict] | object) -> dict:
     """Apply confirmed stock additions using explicit product IDs."""
+    from grocy_mcp.core.stock import product_lock
+
     parsed_items = _parse_model_list(items, WorkflowApplyItem, "items")
 
     for item in parsed_items:
@@ -226,9 +228,11 @@ async def workflow_stock_intake_apply_data(client: GrocyClient, items: list[dict
                 "shopping_location_id",
             },
         )
-        await client.add_stock(
-            item.product_id, item.amount, **{k: v for k, v in options.items() if v is not None}
-        )
+        # same per-product lock as inventory/consume, so an add cannot slip into their sequences
+        async with product_lock(item.product_id):
+            await client.add_stock(
+                item.product_id, item.amount, **{k: v for k, v in options.items() if v is not None}
+            )
 
     return {
         "applied_count": len(parsed_items),
