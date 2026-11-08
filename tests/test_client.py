@@ -269,3 +269,134 @@ async def test_get_stock_entry_null_response_is_not_found(client, mock_api):
     mock_api.get("/stock/entry/999").mock(return_value=httpx.Response(200, content=b"null"))
     with pytest.raises(GrocyNotFoundError, match="may have been consumed"):
         await client.get_stock_entry(999)
+
+
+async def test_unreadable_json_becomes_a_grocy_server_error(client, mock_api):
+    mock_api.get("/stock").mock(return_value=httpx.Response(200, text="<html>not json</html>"))
+    with pytest.raises(GrocyServerError, match="unreadable response to GET /api/stock"):
+        await client.get_stock()
+
+
+async def test_inventory_then_unreadable_details_reports_a_partial_not_a_crash(client, mock_api):
+    from grocy_mcp.core.stock import stock_inventory_outcome
+
+    mock_api.get("/stock/products/1").mock(
+        side_effect=[
+            httpx.Response(200, json={"stock_amount": 3, "stock_amount_opened": 0}),
+            httpx.Response(200, text="<html>gateway hiccup</html>"),
+        ]
+    )
+    write = mock_api.post("/stock/products/1/inventory").mock(
+        return_value=httpx.Response(200, json=[{"id": 1}])
+    )
+    outcome = await stock_inventory_outcome(client, "1", 2.0)
+    assert write.called
+    assert outcome.ok is False and outcome.partial is True
+    assert "stock set to 2" in outcome.message and "unreadable response" in outcome.message
+
+
+async def test_unreadable_json_before_any_write_is_an_ordinary_grocy_error(client, mock_api):
+    from grocy_mcp.core.stock import stock_inventory_outcome
+
+    mock_api.get("/stock/products/1").mock(return_value=httpx.Response(200, text="oops"))
+    # no inventory route is registered: respx would fail the test if a write were attempted
+    with pytest.raises(GrocyServerError):
+        await stock_inventory_outcome(client, "1", 2.0)
+
+
+@pytest.mark.parametrize(
+    "call, route",
+    [
+        (lambda c: c.add_stock(1, 2.0), ("post", "/stock/products/1/add")),
+        (lambda c: c.consume_stock(1, 1.0), ("post", "/stock/products/1/consume")),
+        (lambda c: c.transfer_stock(1, 1.0, 2, 3), ("post", "/stock/products/1/transfer")),
+        (lambda c: c.inventory_stock(1, 2.0), ("post", "/stock/products/1/inventory")),
+        (lambda c: c.open_stock(1, 1.0), ("post", "/stock/products/1/open")),
+        (lambda c: c.update_stock_entry(24, {"amount": 1}), ("put", "/stock/entry/24")),
+    ],
+)
+async def test_acknowledged_stock_writes_survive_an_unreadable_body(client, mock_api, call, route):
+    method, path = route
+    sent = getattr(mock_api, method)(path).mock(
+        return_value=httpx.Response(200, text="<html>gateway</html>")
+    )
+    assert await call(client) is None  # applied; nothing to report, nothing to retry
+    assert sent.called
+
+
+async def test_reads_and_create_still_require_a_readable_body(client, mock_api):
+    mock_api.get("/stock/products/1/locations").mock(return_value=httpx.Response(200, text="x"))
+    mock_api.post("/objects/products").mock(return_value=httpx.Response(200, text="x"))
+    with pytest.raises(GrocyServerError):
+        await client.get_stock_locations(1)
+    with pytest.raises(GrocyServerError):  # the new id is needed, so this one stays strict
+        await client.create_object("products", {"name": "x"})
+
+
+async def test_acknowledged_inventory_with_unreadable_body_is_recorded_as_applied(client, mock_api):
+    from grocy_mcp.core.stock import stock_inventory_outcome
+
+    mock_api.get("/stock/products/1").mock(
+        side_effect=[
+            httpx.Response(200, json={"stock_amount": 3, "stock_amount_opened": 0}),
+            httpx.Response(200, json={"stock_amount": 2, "stock_amount_opened": 0}),
+        ]
+    )
+    mock_api.post("/stock/products/1/inventory").mock(
+        return_value=httpx.Response(200, text="<html>no json</html>")
+    )
+    outcome = await stock_inventory_outcome(client, "1", 2.0)
+    assert outcome.ok is True and "Inventory updated" in outcome.message
+
+
+async def test_batch_does_not_report_an_applied_consume_as_failed(client, mock_api):
+    from grocy_mcp.core.workflows import workflow_stock_apply_data
+
+    consume = mock_api.post("/stock/products/1/consume").mock(
+        return_value=httpx.Response(200, text="<html>no json</html>")
+    )
+    result = await workflow_stock_apply_data(
+        client, [{"action": "consume", "product": "1", "amount": 1}]
+    )
+    assert consume.call_count == 1
+    assert result["results"][0]["ok"] is True and result["applied_count"] == 1
+
+
+@pytest.mark.parametrize("status", [301, 302, 307, 308])
+async def test_a_redirect_is_an_error_not_a_success(client, mock_api, status):
+    sent = mock_api.post("/stock/products/1/add").mock(
+        return_value=httpx.Response(
+            status, headers={"Location": "https://grocy.test/login"}, text="<html>go</html>"
+        )
+    )
+    with pytest.raises(GrocyServerError, match=r"redirect to https://grocy.test/login.*GROCY_URL"):
+        await client.add_stock(1, 2.0)
+    assert sent.call_count == 1  # and nothing is retried or followed
+
+
+async def test_a_redirected_read_says_redirect_not_unreadable_json(client, mock_api):
+    mock_api.get("/stock").mock(
+        return_value=httpx.Response(302, headers={"Location": "/login"}, text="<html/>")
+    )
+    with pytest.raises(GrocyServerError, match="redirect"):
+        await client.get_stock()
+
+
+async def test_batch_reports_a_redirected_write_as_failed(client, mock_api):
+    from grocy_mcp.core.workflows import workflow_stock_apply_data
+
+    mock_api.post("/stock/products/1/consume").mock(
+        return_value=httpx.Response(302, headers={"Location": "https://x/login"}, text="<html/>")
+    )
+    result = await workflow_stock_apply_data(
+        client, [{"action": "consume", "product": "1", "amount": 1}]
+    )
+    assert result["results"][0]["ok"] is False and result["applied_count"] == 0
+    assert "redirect" in result["results"][0]["error"]
+
+
+async def test_successful_statuses_without_a_body_still_work(client, mock_api):
+    mock_api.put("/userfields/products/87").mock(return_value=httpx.Response(204))
+    mock_api.post("/stock/products/1/open").mock(return_value=httpx.Response(200, text=""))
+    await client.update_userfields("products", 87, {"a": 1})
+    assert await client.open_stock(1, 1.0) is None

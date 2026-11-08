@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Literal
+import math
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
@@ -153,3 +154,80 @@ class WorkflowShoppingReconcileApplyAction(BaseModel):
             if self.new_amount <= 0:
                 raise ValueError("new_amount must be greater than 0 when action is set_amount")
         return self
+
+
+def _finite_positive(value: float) -> float:
+    if not (math.isfinite(value) and value > 0):
+        raise ValueError("must be a finite number greater than 0")
+    return value
+
+
+class _StockActionBase(BaseModel):
+    product: str
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("product", mode="before")
+    @classmethod
+    def product_as_text(cls, value: object) -> object:
+        return str(value) if isinstance(value, int) and not isinstance(value, bool) else value
+
+    @field_validator("product")
+    @classmethod
+    def product_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("product must not be blank")
+        return value.strip()
+
+
+class StockConsumeAction(_StockActionBase):
+    action: Literal["consume"]
+    amount: float
+    from_location: str | None = None
+    spoiled: bool = False
+
+    @field_validator("amount")
+    @classmethod
+    def amount_positive(cls, value: float) -> float:
+        return _finite_positive(value)
+
+
+class StockOpenAction(_StockActionBase):
+    action: Literal["open"]
+    amount: float = 1.0
+
+    @field_validator("amount")
+    @classmethod
+    def amount_positive(cls, value: float) -> float:
+        return _finite_positive(value)
+
+
+class StockInventoryAction(_StockActionBase):
+    action: Literal["inventory"]
+    new_amount: float
+    opened_amount: float | None = None
+
+    @field_validator("new_amount")
+    @classmethod
+    def new_amount_not_negative(cls, value: float) -> float:
+        if not (math.isfinite(value) and value >= 0):
+            raise ValueError("must be a finite number that is not negative")
+        return value
+
+
+class StockTransferAction(_StockActionBase):
+    action: Literal["transfer"]
+    amount: float
+    to_location: str
+    from_location: str | None = None
+
+    @field_validator("amount")
+    @classmethod
+    def amount_positive(cls, value: float) -> float:
+        return _finite_positive(value)
+
+
+StockAction = Annotated[
+    StockConsumeAction | StockOpenAction | StockInventoryAction | StockTransferAction,
+    Field(discriminator="action"),
+]

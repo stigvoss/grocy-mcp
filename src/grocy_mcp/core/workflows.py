@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import json
+import re
 from collections import defaultdict
 from typing import TypeVar
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from grocy_mcp.client import GrocyClient
-from grocy_mcp.exceptions import GrocyValidationError
+from grocy_mcp.exceptions import GrocyError, GrocyValidationError
 from grocy_mcp.workflow_models import (
+    StockAction,
     WorkflowApplyItem,
     WorkflowMatchPreviewItem,
     WorkflowNormalizedInputItem,
@@ -381,4 +384,115 @@ async def workflow_shopping_reconcile_apply(
             lines.append(
                 f"  Shopping item {action['shopping_item_id']}: amount set to {action['new_amount']}"
             )
+    return "\n".join(lines)
+
+
+_MAX_STOCK_ACTIONS = 100
+_STOCK_ACTIONS = ("consume", "open", "inventory", "transfer")
+_GROCY_ERROR = re.compile(r'\{"error_message":\s*("(?:[^"\\]|\\.)*")')
+
+
+def _short_error(error: Exception) -> str:
+    """Strip Grocy's JSON wrapper so a failed action reads as one plain sentence."""
+    match = _GROCY_ERROR.search(str(error))
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except json.JSONDecodeError:
+            pass
+    return str(error)
+
+
+_stock_action_adapter: TypeAdapter = TypeAdapter(StockAction)
+
+
+async def workflow_stock_apply_data(client: GrocyClient, actions: list[dict] | object) -> dict:
+    """Apply mixed stock actions (consume, open, inventory, transfer) one by one.
+
+    Unlike the intake apply, a failing action does not abort the others: every action gets its
+    own result, and the reply says exactly which were applied. Actions run in the order given, so
+    several actions on the same product see each other's effects.
+    """
+    from grocy_mcp.core.stock import (
+        stock_consume,
+        stock_inventory_outcome,
+        stock_open_outcome,
+        stock_transfer,
+    )
+
+    if not isinstance(actions, list):
+        raise GrocyValidationError("Invalid actions: expected a JSON array")
+    if len(actions) > _MAX_STOCK_ACTIONS:
+        raise GrocyValidationError(f"Too many actions: at most {_MAX_STOCK_ACTIONS} per call.")
+
+    results = []
+    for index, raw in enumerate(actions):
+        entry: dict = {
+            "index": index,
+            "action": raw.get("action") if isinstance(raw, dict) else None,
+        }
+        if isinstance(raw, dict) and raw.get("action") not in _STOCK_ACTIONS:
+            entry.update(
+                ok=False,
+                error=(
+                    f"actions[{index}]: unknown action {raw.get('action')!r}; "
+                    f"expected one of {', '.join(_STOCK_ACTIONS)}"
+                ),
+            )
+            results.append(entry)
+            continue
+        try:
+            act = _stock_action_adapter.validate_python(raw)
+        except ValidationError as error:
+            entry.update(ok=False, error=_validation_message(f"actions[{index}]", error))
+            results.append(entry)
+            continue
+        entry["product"] = act.product
+        try:
+            if act.action == "consume":
+                message = await stock_consume(
+                    client, act.product, act.amount, act.from_location, act.spoiled
+                )
+                entry.update(ok=True, message=message)
+            elif act.action == "transfer":
+                message = await stock_transfer(
+                    client, act.product, act.amount, act.to_location, act.from_location
+                )
+                entry.update(ok=True, message=message)
+            else:
+                # open and inventory report whether the request was carried out, not just text
+                if act.action == "open":
+                    outcome = await stock_open_outcome(client, act.product, act.amount)
+                else:
+                    outcome = await stock_inventory_outcome(
+                        client, act.product, act.new_amount, act.opened_amount
+                    )
+                if outcome.ok:
+                    entry.update(ok=True, message=outcome.message)
+                else:
+                    entry.update(ok=False, error=outcome.message)
+                    if outcome.partial:
+                        entry["partial"] = True
+        except GrocyError as error:
+            entry.update(ok=False, error=_short_error(error))
+        except Exception as error:  # noqa: BLE001 - one bad item must not discard the others
+            entry.update(ok=False, error=f"Unexpected error: {type(error).__name__}: {error}")
+        results.append(entry)
+
+    applied = sum(1 for r in results if r["ok"])
+    return {"applied_count": applied, "failed_count": len(results) - applied, "results": results}
+
+
+async def workflow_stock_apply(client: GrocyClient, actions: list[dict] | object) -> str:
+    """Return a human-readable summary of a batch of stock actions."""
+    result = await workflow_stock_apply_data(client, actions)
+    lines = [
+        f"Workflow stock apply: {result['applied_count']} applied, {result['failed_count']} failed."
+    ]
+    for r in result["results"]:
+        status = "ok" if r["ok"] else ("PARTIAL" if r.get("partial") else "FAILED")
+        lines.append(
+            f"  [{r['index']}] {r['action']} {r.get('product', '')}: {status} - "
+            f"{r.get('message') or r.get('error')}"
+        )
     return "\n".join(lines)

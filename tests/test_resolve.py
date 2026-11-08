@@ -115,3 +115,21 @@ async def test_resolve_location_wrapper():
     result = await resolve_location(client, "Pantry")
     assert result == 3
     client.get_objects.assert_called_once_with("locations")
+
+
+async def test_non_ascii_digits_are_names_not_ids():
+    from unittest.mock import AsyncMock
+
+    from grocy_mcp.core.resolve import is_numeric_id, resolve_entity
+    from grocy_mcp.exceptions import GrocyResolveError
+
+    assert is_numeric_id("42") and not is_numeric_id("²") and not is_numeric_id("")
+    assert not is_numeric_id("٣") and not is_numeric_id("4 2")
+    client = AsyncMock()
+    client.get_objects.return_value = [{"id": 1, "name": "Milk"}, {"id": 2, "name": "M²"}]
+    assert await resolve_entity(client, "products", "7") == 7
+    # a lone '²' is looked up by name (it is part of "M²"), not parsed as an ID
+    assert await resolve_entity(client, "products", "²") == 2
+    client.get_objects.return_value = [{"id": 1, "name": "Milk"}]
+    with pytest.raises(GrocyResolveError):
+        await resolve_entity(client, "products", "²")

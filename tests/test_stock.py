@@ -1157,6 +1157,19 @@ async def test_undo_overlapping_an_edit_is_not_overwritten():
     assert client.entry["amount"] == 2 and client.entry["price"] == 9.5
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), -1.0])
+async def test_stock_inventory_rejects_a_non_finite_or_negative_target_before_any_request(
+    mock_client, bad
+):
+    from grocy_mcp.exceptions import GrocyValidationError
+
+    for kwargs in ({}, {"opened_amount": 0}):
+        with pytest.raises(GrocyValidationError, match="new_amount"):
+            await stock_inventory(mock_client, "Milk", bad, **kwargs)
+    mock_client.get_stock_product.assert_not_called()
+    mock_client.inventory_stock.assert_not_called()
+
+
 class _FakeOpenClient(_FakeProductClient):
     """One unopened pack; opening flips the entry to opened, like Grocy does."""
 

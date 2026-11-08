@@ -6,13 +6,19 @@ from grocy_mcp.client import GrocyClient
 from grocy_mcp.exceptions import GrocyResolveError
 
 
+def is_numeric_id(text: str) -> bool:
+    """True for plain ASCII digits. ``str.isdigit()`` is also true for characters such as
+    ``'²'`` that ``int()`` cannot parse, which would crash instead of being looked up by name."""
+    return text.isascii() and text.isdigit()
+
+
 async def resolve_entity(
     client: GrocyClient,
     entity: str,
     name_or_id: str,
     name_field: str = "name",
 ) -> int:
-    if name_or_id.isdigit():
+    if is_numeric_id(name_or_id):
         return int(name_or_id)
 
     items = await client.get_objects(entity)

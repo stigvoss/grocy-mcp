@@ -112,6 +112,7 @@ from grocy_mcp.core.workflows import (
     workflow_match_products_preview_data,
     workflow_shopping_reconcile_apply_data,
     workflow_shopping_reconcile_preview_data,
+    workflow_stock_apply_data,
     workflow_stock_intake_apply_data,
     workflow_stock_intake_preview_data,
 )
@@ -1257,6 +1258,30 @@ def create_mcp_server() -> FastMCP:
         parsed_items = _parse_json_arg(items, "items")
         async with _get_client() as client:
             return await workflow_stock_intake_apply_data(client, parsed_items)
+
+    @mcp.tool()
+    async def workflow_stock_apply_tool(actions: str) -> dict:
+        """Apply several stock actions in one call: consume, open, inventory and transfer.
+
+        Use this after the user confirms a batch (e.g. a stock check-in) instead of calling the
+        single-product tools one after another. Actions run in the order given. A failing
+        action does not abort the others: each gets its own result with ok true/false and a
+        message or error, and applied_count/failed_count say exactly what was applied.
+
+        Args:
+            actions: JSON array; each item has "action" and "product" (name or ID):
+                {"action": "consume", "product": "Milk", "amount": 1,
+                 "from_location": "Freezer", "spoiled": false}  (last two optional)
+                {"action": "open", "product": "Milk", "amount": 1}  (amount defaults to 1)
+                {"action": "inventory", "product": "Milk", "new_amount": 2,
+                 "opened_amount": 1}  (opened_amount optional)
+                {"action": "transfer", "product": "Milk", "amount": 1,
+                 "to_location": "Freezer", "from_location": "Fridge"}  (from optional)
+                At most 100 actions.
+        """
+        parsed_actions = _parse_json_arg(actions, "actions")
+        async with _get_client() as client:
+            return await workflow_stock_apply_data(client, parsed_actions)
 
     @mcp.tool()
     async def workflow_shopping_reconcile_preview_tool(items: str, list_id: int = 1) -> list[dict]:

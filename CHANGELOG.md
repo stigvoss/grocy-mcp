@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Batch stock actions**: `workflow_stock_apply_tool` (and `grocy workflow stock-apply`) applies a
+  mixed list of consume, open, inventory and transfer actions in order; a failing action does not
+  abort the others and every action gets its own result
 - **Usage summary**: `stock_usage_stats_tool(product, days=90)` returns purchases (count, amount,
   dates, spend, average price), consumes (spoiled kept apart), opens, average daily use, median and
   last gap in days between events, days since the last movement and current stock
