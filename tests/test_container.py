@@ -64,8 +64,15 @@ def test_dockerignore_keeps_everything_the_wheel_build_copies():
     assert not (needed & ignored), f"in both COPY and .dockerignore: {needed & ignored}"
 
 
-def test_workflow_publishes_both_architectures_only_outside_pull_requests():
+def test_workflow_publishes_both_architectures_only_from_main_and_version_tags():
     workflow = (ROOT / ".github" / "workflows" / "docker.yml").read_text()
     assert "linux/amd64,linux/arm64" in workflow
-    assert "push: ${{ github.event_name != 'pull_request' }}" in workflow
-    assert "if: github.event_name != 'pull_request'" in workflow  # the registry login
+    # one condition decides publishing, and everything that publishes or logs in uses it
+    assert "github.event_name != 'pull_request'" in workflow
+    assert "github.ref == 'refs/heads/main'" in workflow
+    assert "startsWith(github.ref, 'refs/tags/v')" in workflow
+    assert workflow.count("env.PUBLISH == 'true'") == 4  # login, name, push, summary
+    # no step may publish on the weaker "not a pull request" condition alone
+    for line in workflow.splitlines():
+        if line.strip().startswith(("if:", "push:")):
+            assert "github.event_name != 'pull_request'" not in line, line
