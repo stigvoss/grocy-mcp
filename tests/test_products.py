@@ -1,6 +1,7 @@
 """Tests for bulk product reads."""
 
-from unittest.mock import AsyncMock
+import asyncio
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -113,6 +114,154 @@ async def test_userfield_filters_combine_and_validate(userfield_client):
             await products_list_data(userfield_client, userfields_match=bad)
 
 
+@pytest.fixture
+def create_client():
+    from grocy_mcp.core import products as products_module  # noqa: F401
+
+    client = AsyncMock()
+
+    async def get_objects(entity, query=None):
+        return {
+            "quantity_units": [{"id": 2, "name": "Piece"}, {"id": 3, "name": "Pack"}],
+            "locations": [{"id": 2, "name": "Fridge"}, {"id": 4, "name": "Freezer"}],
+            "product_groups": [{"id": 9, "name": "Dairy"}],
+            "products": [
+                {"id": 1, "name": "Minced beef, frozen 200g"},
+                {"id": 2, "name": "Whole milk"},
+            ],
+        }[entity]
+
+    client.get_objects.side_effect = get_objects
+    client.create_object.return_value = 77
+    return client
+
+
+async def test_product_create_validates_and_creates_with_all_fields(create_client):
+    from grocy_mcp.core.products import product_create_data
+
+    result = await product_create_data(
+        create_client,
+        "  Skyr,   natural ",
+        "pack",
+        "Freezer",
+        product_group="Dairy",
+        default_best_before_days=14,
+        min_stock_amount=2,
+        userfields={"bilkatogo_ids": "19753", "high_churn": 1},
+    )
+    create_client.create_object.assert_called_once_with(
+        "products",
+        {
+            "name": "Skyr, natural",
+            "location_id": 4,
+            "qu_id_stock": 3,
+            "qu_id_purchase": 3,
+            "qu_id_consume": 3,
+            "qu_id_price": 3,
+            "product_group_id": 9,
+            "default_best_before_days": 14,
+            "min_stock_amount": 2,
+        },
+    )
+    create_client.update_userfields.assert_called_once_with(
+        "products", 77, {"bilkatogo_ids": "19753", "high_churn": 1}
+    )
+    assert result == {
+        "created": True,
+        "product_id": 77,
+        "name": "Skyr, natural",
+        "stock_unit": "Pack",
+        "location": "Freezer",
+        "product_group": "Dairy",
+        "userfields_set": ["bilkatogo_ids", "high_churn"],
+    }
+
+
+@pytest.mark.parametrize(
+    "kwargs, expected",
+    [
+        (
+            {"stock_unit": "Litre", "location": "Fridge"},
+            r"Unknown stock unit 'Litre'.*Piece \(2\), Pack \(3\)",
+        ),
+        (
+            {"stock_unit": "Pack", "location": "Cellar"},
+            r"Unknown location 'Cellar'.*Fridge \(2\), Freezer \(4\)",
+        ),
+        (
+            {"stock_unit": "Pack", "location": "2", "product_group": "Meat"},
+            r"Unknown product group 'Meat'.*Dairy \(9\)",
+        ),
+    ],
+)
+async def test_product_create_unknown_references_list_valid_values(create_client, kwargs, expected):
+    from grocy_mcp.core.products import product_create_data
+
+    with pytest.raises(GrocyValidationError, match=expected):
+        await product_create_data(create_client, "New thing", **kwargs)
+    create_client.create_object.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "name, reason",
+    [
+        ("frozen 200g Minced beef", "same name"),
+        ("MINCED BEEF frozen 200G", "same name"),
+        ("Milk whole", "same name"),
+        ("Whole milks", "very similar"),
+        ("Minced beaf frozen 200g", "very similar"),
+    ],
+)
+async def test_product_create_flags_near_duplicates_and_force_overrides(
+    create_client, name, reason
+):
+    from grocy_mcp.core.products import product_create_data
+
+    result = await product_create_data(create_client, name, "Pack", "Fridge")
+    assert result["created"] is False
+    assert reason in result["duplicates"][0]["reason"]
+    create_client.create_object.assert_not_called()
+
+    forced = await product_create_data(create_client, name, "Pack", "Fridge", force=True)
+    assert forced["created"] is True
+
+
+async def test_product_create_does_not_flag_different_products(create_client):
+    from grocy_mcp.core.products import product_create_data
+
+    result = await product_create_data(create_client, "Milk chocolate", "Pack", "Fridge")
+    assert result["created"] is True
+
+
+async def test_product_create_userfield_failure_keeps_the_product_and_warns(create_client):
+    from grocy_mcp.core.products import product_create_data
+
+    create_client.update_userfields.side_effect = GrocyValidationError("no such field")
+    result = await product_create_data(
+        create_client, "Butter", "Pack", "Fridge", userfields={"nope": "x"}
+    )
+    assert result["created"] is True and "userfields_set_tool" in result["warning"]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"name": "  "},
+        {"name": "X", "min_stock_amount": -1},
+        {"name": "X", "min_stock_amount": float("nan")},
+        {"name": "X", "default_best_before_days": -5},
+        {"name": "X", "userfields": ["a"]},
+    ],
+)
+async def test_product_create_validates_inputs_before_any_request(create_client, kwargs):
+    from grocy_mcp.core.products import product_create_data
+
+    with pytest.raises(GrocyValidationError):
+        await product_create_data(create_client, stock_unit="Pack", location="Fridge", **kwargs)
+    create_client.get_objects.assert_not_called()
+    create_client.create_object.assert_not_called()
+
+
 def test_userfield_contains_lowercases_after_url_decoding():
     from grocy_mcp.core.products import userfield_contains
 
@@ -128,6 +277,40 @@ async def test_encoded_uppercase_is_found_by_both_search_paths(userfield_client)
     ]
     found = await products_list_data(userfield_client, userfields_contains={"bilkatogo": "oksekød"})
     assert [p["id"] for p in found] == [9]
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Minced veef", "veef Minced", "MINCED BEEFF", "Mincd beef"],
+)
+async def test_product_create_flags_a_typo_wherever_it_sorts(name):
+    from grocy_mcp.core.products import find_near_duplicates
+
+    found = find_near_duplicates(name, [{"id": 1, "name": "Minced beef"}])
+    assert [f["product_id"] for f in found] == [1]
+
+
+@pytest.mark.parametrize("name", ["Minced chicken", "Beef", "Milk", "Minced beef stew"])
+async def test_product_create_does_not_flag_clearly_different_names(name):
+    from grocy_mcp.core.products import find_near_duplicates
+
+    assert find_near_duplicates(name, [{"id": 1, "name": "Minced beef"}]) == []
+
+
+@pytest.mark.parametrize("failure", ["GrocyNotFoundError", "GrocyServerError", "GrocyAuthError"])
+async def test_product_create_keeps_the_new_id_when_the_userfield_request_fails(
+    create_client, failure
+):
+    from grocy_mcp import exceptions
+    from grocy_mcp.core.products import product_create_data
+
+    create_client.update_userfields.side_effect = getattr(exceptions, failure)("boom")
+    result = await product_create_data(
+        create_client, "Butter", "Pack", "Fridge", userfields={"ai_notes": "x"}
+    )
+    assert result["created"] is True and result["product_id"] == 77
+    assert "77" in result["warning"] and "userfields_set_tool" in result["warning"]
+    assert "userfields_set" not in result
 
 
 async def test_userfield_filters_treat_numeric_zero_as_a_value():
@@ -147,6 +330,104 @@ async def test_userfield_filters_treat_numeric_zero_as_a_value():
     assert [p["id"] for p in contained] == [1]
 
 
+@pytest.mark.parametrize(
+    "name", ["Pepper, whole while", "Pepper, while whole", "while Pepper whole"]
+)
+async def test_duplicate_matching_does_not_depend_on_word_order(name):
+    from grocy_mcp.core.products import find_near_duplicates
+
+    found = find_near_duplicates(name, [{"id": 1, "name": "Pepper, whole white"}])
+    assert [f["product_id"] for f in found] == [1]
+
+
+async def test_duplicate_matching_long_names_still_work():
+    from grocy_mcp.core.products import find_near_duplicates
+
+    existing = "alpha bravo charlie delta echo foxtrot golf hotel india"
+    typo = "alpha bravo charlie delta echo foxtrot golf hotel indla"
+    assert find_near_duplicates(typo, [{"id": 1, "name": existing}])
+    assert not find_near_duplicates(
+        "one two three four five six seven eight nine", [{"id": 1, "name": existing}]
+    )
+
+
+async def test_an_id_wins_over_a_name_that_looks_like_it(create_client):
+    from grocy_mcp.core.products import product_create_data
+
+    async def get_objects(entity, query=None):
+        return {
+            "quantity_units": [{"id": 2, "name": "4"}, {"id": 4, "name": "Pack"}],
+            "locations": [{"id": 2, "name": "4"}, {"id": 4, "name": "Freezer"}],
+            "product_groups": [{"id": 3, "name": "7"}, {"id": 7, "name": "Dairy"}],
+            "products": [],
+        }[entity]
+
+    create_client.get_objects.side_effect = get_objects
+    result = await product_create_data(
+        create_client, "New thing", stock_unit="4", location="4", product_group="7"
+    )
+    data = create_client.create_object.call_args.args[1]
+    assert data["qu_id_stock"] == 4 and data["location_id"] == 4 and data["product_group_id"] == 7
+    assert result["stock_unit"] == "Pack" and result["location"] == "Freezer"
+    # a name still resolves when it is not also an ID
+    await product_create_data(
+        create_client, "Other", stock_unit="pack", location="freezer", force=True
+    )
+    assert create_client.create_object.call_args.args[1]["qu_id_stock"] == 4
+
+
+def test_word_matching_is_one_to_one():
+    from grocy_mcp.core.products import _words_similar
+
+    # both "whole" would pair with the single "whole"; "white" is too far from "whole" to stand in
+    assert not _words_similar(["whole", "whole"], ["whole", "white"])
+    assert _words_similar(["whole", "while"], ["white", "whole"])
+
+
+def test_long_scrambled_names_with_typos_still_match():
+    from grocy_mcp.core.products import _words_similar
+
+    original = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"]
+    scrambled = [
+        "hotel",
+        "golf",
+        "foxtrot",
+        "echoo",
+        "delta",
+        "charlie",
+        "bravo",
+        "alpha",
+    ]  # one typo
+    assert _words_similar(scrambled, original)
+    assert _words_similar(original[::-1], original)
+
+
+def test_unrelated_names_are_cheap_even_with_many_words():
+    import time
+
+    from grocy_mcp.core.products import _words_similar
+
+    eight = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"]
+    unrelated = ["one", "two", "three", "four", "five", "six", "seven", "nine"]
+    start = time.perf_counter()
+    assert not any(_words_similar(unrelated, eight) for _ in range(2000))
+    assert time.perf_counter() - start < 2.0  # a factorial search would need minutes
+
+    # worst case for the search itself: every word resembles every word
+    similar = ["aaaaa", "aaaab", "aaaac", "aaaad", "aaaae", "aaaaf", "aaaag", "aaaah"]
+    start = time.perf_counter()
+    assert _words_similar(similar, list(reversed(similar)))
+    assert time.perf_counter() - start < 1.0
+
+
+def test_names_beyond_the_dynamic_programme_limit_use_greedy_pairing():
+    from grocy_mcp.core.products import _words_similar
+
+    words = [f"word{chr(97 + i)}x" for i in range(17)]
+    assert _words_similar(words, list(reversed(words)))
+    assert not _words_similar(words, [f"zzz{i}" for i in range(17)])
+
+
 @pytest.mark.parametrize("key", ["", "   "])
 @pytest.mark.parametrize("filter_name", ["userfields_match", "userfields_contains"])
 async def test_blank_userfield_names_are_rejected_in_both_filters(
@@ -156,3 +437,206 @@ async def test_blank_userfield_names_are_rejected_in_both_filters(
     with pytest.raises(GrocyValidationError, match="non-blank userfield names"):
         await products_list_data(userfield_client, **{filter_name: {key: "19753"}})
     userfield_client.get_objects.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "new_name, existing",
+    [
+        ("Organic ppeper", "Organic pepper"),
+        ("Organic pepper", "Organic ppeper"),
+        ("Tomaot sauce", "Tomato sauce"),
+        ("Tomato sauce", "Tomaot sauce"),
+    ],
+)
+def test_duplicate_detection_is_symmetric_for_transposed_letters(new_name, existing):
+    from grocy_mcp.core.products import find_near_duplicates
+
+    assert find_near_duplicates(new_name, [{"id": 1, "name": existing}])
+
+
+def test_word_similarity_is_the_same_in_both_directions():
+    from grocy_mcp.core.products import _word_ratio
+
+    assert _word_ratio("ppeper", "pepper") == _word_ratio("pepper", "ppeper")
+    assert _word_ratio("ppeper", "pepper") >= 0.83
+
+
+@pytest.mark.parametrize("name", ["🥛", "  🥛 ", "!!!", "  ??  "])
+def test_symbol_only_names_are_compared_by_their_full_text(name):
+    from grocy_mcp.core.products import find_near_duplicates
+
+    existing = [{"id": 1, "name": name.strip()}]
+    assert [f["product_id"] for f in find_near_duplicates(name, existing)] == [1]
+
+
+def test_different_symbol_only_names_are_not_duplicates():
+    from grocy_mcp.core.products import find_near_duplicates
+
+    assert find_near_duplicates("🥛", [{"id": 1, "name": "🍞"}, {"id": 2, "name": "Milk"}]) == []
+    assert find_near_duplicates("Milk", [{"id": 1, "name": "🥛"}]) == []
+
+
+async def test_product_create_does_not_create_a_second_emoji_only_product(create_client):
+    from grocy_mcp.core.products import product_create_data
+
+    async def get_objects(entity, query=None):
+        return {
+            "quantity_units": [{"id": 3, "name": "Pack"}],
+            "locations": [{"id": 2, "name": "Fridge"}],
+            "product_groups": [],
+            "products": [{"id": 5, "name": "🥛"}],
+        }[entity]
+
+    create_client.get_objects.side_effect = get_objects
+    result = await product_create_data(create_client, "🥛", "Pack", "Fridge")
+    assert result["created"] is False and result["duplicates"][0]["product_id"] == 5
+    create_client.create_object.assert_not_called()
+    forced = await product_create_data(create_client, "🥛", "Pack", "Fridge", force=True)
+    assert forced["created"] is True
+
+
+@pytest.mark.parametrize(
+    "new_name, existing",
+    [
+        ("Pa\u0302te\u0301", "Pâté"),  # decomposed request, composed existing
+        ("Pâté", "Pa\u0302te\u0301"),  # composed request, decomposed existing
+        ("Cre\u0300me bru\u0302le\u0301e", "Crème brûlée"),
+        ("Å", "A\u030a"),  # symbol-free single-letter names too
+    ],
+)
+def test_canonically_equivalent_names_are_duplicates(new_name, existing):
+    from grocy_mcp.core.products import find_near_duplicates
+
+    found = find_near_duplicates(new_name, [{"id": 1, "name": existing}])
+    assert [f["product_id"] for f in found] == [1]
+    assert "same name" in found[0]["reason"]
+
+
+def test_unrelated_accented_names_are_still_different():
+    from grocy_mcp.core.products import find_near_duplicates
+
+    assert find_near_duplicates("Rød", [{"id": 1, "name": "Mælk"}]) == []
+
+
+async def test_product_create_stores_the_composed_form(create_client):
+    from grocy_mcp.core.products import product_create_data
+
+    await product_create_data(create_client, "Cre\u0300me", "Pack", "Fridge")
+    assert create_client.create_object.call_args.args[1]["name"] == "Crème"
+
+
+class _SharedCatalog:
+    """One Grocy: a created product only shows up in later reads (like the real catalog)."""
+
+    def __init__(self, instance="http://grocy-a/api"):
+        self.instance = instance
+        self.products: list[dict] = []
+        self.created: list[str] = []
+
+    async def get_objects(self, entity, query=None):
+        await asyncio.sleep(0.01)
+        return {
+            "quantity_units": [{"id": 3, "name": "Pack"}],
+            "locations": [{"id": 2, "name": "Fridge"}],
+            "product_groups": [],
+            "products": list(self.products),
+        }[entity]
+
+    async def create_object(self, entity, data):
+        await asyncio.sleep(0.01)
+        self.products.append({"id": len(self.products) + 1, "name": data["name"]})
+        self.created.append(data["name"])
+        return str(len(self.products))
+
+    async def update_userfields(self, *args):
+        return None
+
+
+async def test_concurrent_creates_of_duplicate_names_create_only_one_product():
+    from grocy_mcp.core.products import product_create_data
+
+    grocy = _SharedCatalog()
+    first, second = await asyncio.gather(
+        product_create_data(grocy, "Butter salted", "Pack", "Fridge"),
+        product_create_data(grocy, "salted Butter", "Pack", "Fridge"),
+    )
+    assert grocy.created == ["Butter salted"]
+    assert [first["created"], second["created"]] == [True, False]
+    assert second["duplicates"][0]["name"] == "Butter salted"
+
+
+async def test_force_still_creates_a_concurrent_duplicate():
+    from grocy_mcp.core.products import product_create_data
+
+    grocy = _SharedCatalog()
+    await asyncio.gather(
+        product_create_data(grocy, "Butter salted", "Pack", "Fridge"),
+        product_create_data(grocy, "salted Butter", "Pack", "Fridge", force=True),
+    )
+    assert sorted(grocy.created) == ["Butter salted", "salted Butter"]
+
+
+async def test_creates_on_different_grocy_instances_do_not_wait_for_each_other():
+    from grocy_mcp.core.products import product_create_data
+
+    a, b = _SharedCatalog("http://grocy-a/api"), _SharedCatalog("http://grocy-b/api")
+    results = await asyncio.gather(
+        product_create_data(a, "Butter salted", "Pack", "Fridge"),
+        product_create_data(b, "Butter salted", "Pack", "Fridge"),
+    )
+    assert [r["created"] for r in results] == [True, True]
+
+
+def test_the_create_lock_guards_the_lookup_not_just_the_post():
+    # negative control: without the lock the same scenario creates both products
+    import contextlib
+
+    from grocy_mcp.core import products as products_module
+
+    @contextlib.asynccontextmanager
+    async def no_lock():
+        yield
+
+    async def scenario():
+        grocy = _SharedCatalog()
+        with patch.object(products_module, "keyed_lock", lambda *a: no_lock()):
+            await asyncio.gather(
+                products_module.product_create_data(grocy, "Butter salted", "Pack", "Fridge"),
+                products_module.product_create_data(grocy, "salted Butter", "Pack", "Fridge"),
+            )
+        return grocy.created
+
+    assert len(asyncio.run(scenario())) == 2  # the race really exists without the lock
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+async def test_non_finite_userfield_values_are_rejected_before_any_request(create_client, bad):
+    from grocy_mcp.core.products import product_create_data
+
+    with pytest.raises(GrocyValidationError, match="userfield 'score' must be"):
+        await product_create_data(
+            create_client, "Thing", "Pack", "Fridge", userfields={"score": bad}
+        )
+    create_client.get_objects.assert_not_called()
+    create_client.create_object.assert_not_called()
+
+
+@pytest.mark.parametrize("bad", [[1, 2], {"a": 1}, object()])
+async def test_non_scalar_userfield_values_are_rejected_too(create_client, bad):
+    from grocy_mcp.core.products import product_create_data
+
+    with pytest.raises(GrocyValidationError, match="userfield 'x' must be"):
+        await product_create_data(create_client, "Thing", "Pack", "Fridge", userfields={"x": bad})
+    create_client.create_object.assert_not_called()
+
+
+async def test_scalar_userfield_values_are_accepted(create_client):
+    from grocy_mcp.core.products import product_create_data
+
+    values = {"text": "a", "flag": True, "count": 3, "ratio": 1.5, "empty": None}
+    result = await product_create_data(create_client, "Thing", "Pack", "Fridge", userfields=values)
+    assert result["created"] is True
+    # None means "not known" and is not sent
+    expected = {k: v for k, v in values.items() if v is not None}
+    create_client.update_userfields.assert_awaited_once_with("products", 77, expected)
+    assert result["userfields_set"] == sorted(expected)

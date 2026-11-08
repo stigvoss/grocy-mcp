@@ -55,7 +55,7 @@ from grocy_mcp.core.meal_plan import (
     meal_plan_shopping,
     meal_plan_summary_data,
 )
-from grocy_mcp.core.products import products_list_data
+from grocy_mcp.core.products import product_create_data, products_list_data
 from grocy_mcp.core.recipes import (
     recipe_add_ingredient,
     recipe_add_to_shopping,
@@ -219,6 +219,50 @@ def create_mcp_server() -> FastMCP:
         async with _get_client() as client:
             return await products_list_data(
                 client, fields, userfields_set, userfields_match, userfields_contains
+            )
+
+    @mcp.tool()
+    async def product_create_tool(
+        name: str,
+        stock_unit: str,
+        location: str,
+        product_group: str | None = None,
+        default_best_before_days: int | None = None,
+        min_stock_amount: float | None = None,
+        userfields: dict[str, str | int | float | bool | None] | None = None,
+        force: bool = False,
+    ) -> dict:
+        """Create a complete product in one call, checking unit, location and duplicates.
+
+        The stock unit cannot be changed once a product has had stock, so settle name, unit and
+        location first. Unit, location and product group are given by name or ID and must exist
+        (the error lists the valid values). Before creating, existing products are searched for
+        the same or a near-duplicate name (ignoring case and word order); if any are found
+        nothing is created and the candidates are returned: use one of them, or pass force=true.
+
+        Args:
+            name: Product name (generic-first, e.g. "Milk, whole").
+            stock_unit: Quantity unit name or ID used for stock, purchase, consume and price.
+            location: Default location name or ID.
+            product_group: Optional product group name or ID.
+            default_best_before_days: Optional default best-before days (-1 = never expires).
+            min_stock_amount: Optional minimum stock amount.
+            userfields: Optional {userfield: value}, e.g. {"bilkatogo_ids": "19753",
+                        "ai_notes": "...", "high_churn": 1}. A null value means "not known"
+                        and is skipped.
+            force: Create even if a near-duplicate name exists.
+        """
+        async with _get_client() as client:
+            return await product_create_data(
+                client,
+                name,
+                stock_unit,
+                location,
+                product_group,
+                default_best_before_days,
+                min_stock_amount,
+                userfields,
+                force,
             )
 
     @mcp.tool()

@@ -30,6 +30,11 @@ class GrocyClient:
             timeout=httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0),
         )
 
+    @property
+    def instance(self) -> str:
+        """Identifies the Grocy server this client talks to (its API base URL)."""
+        return self._base
+
     async def __aenter__(self) -> Self:
         return self
 
