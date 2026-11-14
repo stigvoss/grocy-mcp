@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- build: turn the source tree into a wheel -------------------------------------------------
-FROM python:3.12-slim AS build
+FROM python:3.15-slim AS build
 WORKDIR /src
 RUN pip install --no-cache-dir build
 COPY pyproject.toml README.md ./
@@ -9,7 +9,7 @@ COPY src ./src
 RUN python -m build --wheel --outdir /dist
 
 # ---- runtime: only the wheel and its dependencies ---------------------------------------------
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 # Linked to the repository by the workflow (org.opencontainers.image.* labels are added there).
 ENV PYTHONUNBUFFERED=1 \
